@@ -125,8 +125,8 @@ tooltips on the key section headers. Open the Worker URL in a browser:
   Acknowledge button. Publishers (HR/super_admin) create posts for an audience, mark
   policy items must-acknowledge, re-publish (bumps the version → people re-acknowledge),
   retire/reactivate, and see **who acknowledged** the current version.
-- **Documents** — your **published** documents (payslips, letters, policies) to open or
-  download; draft payslips are never shown. HR/super_admin publish documents to an
+- **Documents** — your **published** documents (payslips, letters, policies, trainings) to
+  open or download; draft payslips are never shown. HR/super_admin publish documents to an
   employee (file upload or text), and can keep them as drafts until ready.
 - **Helpdesk** — raise HR / IT / general requests or a **confidential POSH complaint**;
   track status, SLA and the comment thread. Agents (HR/IT) handle ordinary tickets; a

@@ -562,24 +562,24 @@ Object.assign(DICT.hi, {
 
 // FR-06 Documents strings.
 Object.assign(DICT.en, {
-  navDocuments: "Documents", documents_help: "Your published documents — payslips, letters and policies. Drafts are not shown.",
+  navDocuments: "Documents", documents_help: "Your published documents — payslips, letters, policies and trainings. Drafts are not shown.", openWord: "Open",
   noDocuments: "No documents.", openDoc: "Open", publishDocument: "Publish a document", allDocuments: "All documents",
   forEmployee: "For employee", docBodyOptional: "Text content (optional)", attachFile: "Attach file (PDF/image, optional)", publishNow: "Publish now",
-  doc_payslip: "Payslip", doc_letter: "Letter", doc_policy: "Policy", doc_other: "Other",
+  doc_payslip: "Payslip", doc_letter: "Letter", doc_policy: "Policy", doc_training: "Training", doc_other: "Other",
   dstatus_draft: "draft", dstatus_published: "published", fileTooLarge: "File too large (max ~1.5MB).",
 });
 Object.assign(DICT.kn, {
-  navDocuments: "ದಾಖಲೆಗಳು", documents_help: "ನಿಮ್ಮ ಪ್ರಕಟಿತ ದಾಖಲೆಗಳು — ವೇತನಚೀಟಿ, ಪತ್ರಗಳು, ನೀತಿಗಳು. ಕರಡುಗಳು ತೋರಿಸುವುದಿಲ್ಲ.",
+  navDocuments: "ದಾಖಲೆಗಳು", documents_help: "ನಿಮ್ಮ ಪ್ರಕಟಿತ ದಾಖಲೆಗಳು — ವೇತನಚೀಟಿ, ಪತ್ರಗಳು, ನೀತಿಗಳು ಮತ್ತು ತರಬೇತಿಗಳು. ಕರಡುಗಳು ತೋರಿಸುವುದಿಲ್ಲ.", openWord: "ತೆರೆ",
   noDocuments: "ದಾಖಲೆಗಳಿಲ್ಲ.", openDoc: "ತೆರೆ", publishDocument: "ದಾಖಲೆ ಪ್ರಕಟಿಸಿ", allDocuments: "ಎಲ್ಲಾ ದಾಖಲೆಗಳು",
   forEmployee: "ಉದ್ಯೋಗಿಗಾಗಿ", docBodyOptional: "ಪಠ್ಯ (ಐಚ್ಛಿಕ)", attachFile: "ಫೈಲ್ ಲಗತ್ತಿಸಿ (PDF/ಚಿತ್ರ, ಐಚ್ಛಿಕ)", publishNow: "ಈಗ ಪ್ರಕಟಿಸಿ",
-  doc_payslip: "ವೇತನಚೀಟಿ", doc_letter: "ಪತ್ರ", doc_policy: "ನೀತಿ", doc_other: "ಇತರೆ",
+  doc_payslip: "ವೇತನಚೀಟಿ", doc_letter: "ಪತ್ರ", doc_policy: "ನೀತಿ", doc_training: "ತರಬೇತಿ", doc_other: "ಇತರೆ",
   dstatus_draft: "ಕರಡು", dstatus_published: "ಪ್ರಕಟಿತ", fileTooLarge: "ಫೈಲ್ ತುಂಬಾ ದೊಡ್ಡದು (ಗರಿಷ್ಠ ~1.5MB).",
 });
 Object.assign(DICT.hi, {
-  navDocuments: "दस्तावेज़", documents_help: "आपके प्रकाशित दस्तावेज़ — वेतनपर्ची, पत्र, नीतियाँ। ड्राफ़्ट नहीं दिखते।",
+  navDocuments: "दस्तावेज़", documents_help: "आपके प्रकाशित दस्तावेज़ — वेतनपर्ची, पत्र, नीतियाँ और प्रशिक्षण। ड्राफ़्ट नहीं दिखते।", openWord: "खोलें",
   noDocuments: "कोई दस्तावेज़ नहीं।", openDoc: "खोलें", publishDocument: "दस्तावेज़ प्रकाशित करें", allDocuments: "सभी दस्तावेज़",
   forEmployee: "कर्मचारी के लिए", docBodyOptional: "पाठ सामग्री (वैकल्पिक)", attachFile: "फ़ाइल संलग्न करें (PDF/छवि, वैकल्पिक)", publishNow: "अभी प्रकाशित करें",
-  doc_payslip: "वेतनपर्ची", doc_letter: "पत्र", doc_policy: "नीति", doc_other: "अन्य",
+  doc_payslip: "वेतनपर्ची", doc_letter: "पत्र", doc_policy: "नीति", doc_training: "प्रशिक्षण", doc_other: "अन्य",
   dstatus_draft: "ड्राफ़्ट", dstatus_published: "प्रकाशित", fileTooLarge: "फ़ाइल बहुत बड़ी (अधिकतम ~1.5MB)।",
 });
 
@@ -2060,7 +2060,7 @@ async function renderDocForm() {
   const emp = el("select", {});
   try { const dir = await api("/api/directory"); for (const e of dir.entries) emp.appendChild(el("option", { value: e.id, text: e.name })); } catch { /* none */ }
   const title = el("input", { placeholder: t("title") });
-  const cat = el("select", {}); for (const c of ["payslip", "letter", "policy", "other"]) cat.appendChild(el("option", { value: c, text: t("doc_" + c) }));
+  const cat = el("select", {}); for (const c of ["payslip", "letter", "policy", "training", "other"]) cat.appendChild(el("option", { value: c, text: t("doc_" + c) }));
   const bodyi = el("input", { placeholder: t("docBodyOptional") });
   const file = el("input", { type: "file", accept: "application/pdf,image/*" });
   const pub = el("input", { type: "checkbox" });
@@ -2457,8 +2457,14 @@ async function loadComponentCatalog() {
 }
 
 // ---- Dashboard (role-aware) -----------------------------------------------------
-function statTile(label, value, hint) {
-  return el("div", { class: "stat" }, [el("div", { class: "n", text: String(value) }), el("div", { class: "l", text: label }), hint ? el("div", { class: "muted", style: "font-size:11px;margin-top:2px", text: hint }) : null]);
+function statTile(label, value, hint, go) {
+  // `go` is a view id (string) or a handler (function); when set the tile is clickable.
+  const attrs = { class: "stat" };
+  if (go) {
+    const fire = () => { typeof go === "function" ? go() : switchView(go); };
+    Object.assign(attrs, { class: "stat clickable", role: "button", tabindex: "0", title: t("openWord") || "Open", onclick: fire, onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fire(); } } });
+  }
+  return el("div", attrs, [el("div", { class: "n", text: String(value) }), el("div", { class: "l", text: label }), hint ? el("div", { class: "muted", style: "font-size:11px;margin-top:2px", text: hint }) : null]);
 }
 function barNode(pct, color) {
   return el("div", { style: "height:8px;background:var(--line);border-radius:20px;overflow:hidden;margin-top:6px;max-width:240px" }, [el("div", { style: `height:100%;width:${Math.min(100, Math.max(0, pct))}%;background:${color};border-radius:20px` })]);
@@ -2477,15 +2483,15 @@ async function loadDashboardView() {
     const [d, notif] = await Promise.all([api("/api/dashboard"), api("/api/notifications")]);
     const apc = (notif.items.find((i) => i.kind === "approvals") || {}).count || 0;
     if (d.org) {
-      tiles.appendChild(statTile(t("totalEmployees"), d.org.totalEmployees));
-      tiles.appendChild(statTile(t("activeWord"), d.org.activeEmployees));
-      tiles.appendChild(statTile(t("pendingApprovals"), apc));
-      tiles.appendChild(statTile(t("payrollStatus"), d.org.payroll ? d.org.payroll.status : "—", d.org.payroll ? d.org.payroll.ym : ""));
+      tiles.appendChild(statTile(t("totalEmployees"), d.org.totalEmployees, "", canSeeEmployees() ? "employees" : null));
+      tiles.appendChild(statTile(t("activeWord"), d.org.activeEmployees, "", canSeeEmployees() ? "employees" : null));
+      tiles.appendChild(statTile(t("pendingApprovals"), apc, "", "approvals"));
+      tiles.appendChild(statTile(t("payrollStatus"), d.org.payroll ? d.org.payroll.status : "—", d.org.payroll ? d.org.payroll.ym : "", canViewPayroll() ? "payroll" : null));
     } else if (d.me) {
-      tiles.appendChild(statTile(t("present"), d.me.presentThisMonth, d.me.month));
-      tiles.appendChild(statTile(t("openTasks"), d.me.openTasks));
-      tiles.appendChild(statTile(t("notifications"), notif.total));
-      tiles.appendChild(statTile(t("latestPayslip"), d.me.latestPayslip ? "✓" : "—", d.me.latestPayslip || ""));
+      tiles.appendChild(statTile(t("present"), d.me.presentThisMonth, d.me.month, "attendance"));
+      tiles.appendChild(statTile(t("openTasks"), d.me.openTasks, "", "tasks"));
+      tiles.appendChild(statTile(t("notifications"), notif.total, "", () => toggleNotif()));
+      tiles.appendChild(statTile(t("latestPayslip"), d.me.latestPayslip ? "✓" : "—", d.me.latestPayslip || "", "documents"));
     }
     const ac = document.getElementById("dash_actions"); clear(ac); ac.appendChild(h2help(t("actionCentre"), t("action_help")));
     if (!notif.items.length) ac.appendChild(el("div", { class: "muted", text: t("allClear") }));

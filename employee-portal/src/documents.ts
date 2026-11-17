@@ -1,5 +1,5 @@
 // FR-06 Documents — pure helpers (validation + visibility). No Worker/D1.
-export const DOC_CATEGORIES = ["payslip", "letter", "policy", "other"] as const;
+export const DOC_CATEGORIES = ["payslip", "letter", "policy", "training", "other"] as const;
 export type DocCategory = (typeof DOC_CATEGORIES)[number];
 export const DOC_STATUSES = ["draft", "published"] as const;
 
