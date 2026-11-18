@@ -911,6 +911,10 @@ function pickModalInner() {
   const ctx = APP._pickCtx; if (!ctx) return '';
   const binFilterOpts = (ctx.bins || []).map(b => `<option value="${b.code}">${b.code}${b.zone ? ' — ' + b.zone : ''}</option>`).join('');
   return `
+    <div class="pk-hd" aria-label="Picking progress">
+      <span class="pk-hd-chip units" id="pk-hd-units-chip"><span class="ic" aria-hidden="true">📦</span><span id="pk-hd-units">0 / ${ctx.totalDue}</span><span class="sub">units picked</span></span>
+      <span class="pk-hd-chip lines" id="pk-hd-lines-chip"><span class="ic" aria-hidden="true">✓</span><span id="pk-hd-lines">0 / ${ctx.lines.length}</span><span class="sub">lines</span></span>
+    </div>
     <div class="pk-kbd" aria-hidden="true">⌨️ <span>Type a quantity and press <kbd>Enter</kbd> to jump to the next item. <kbd>↑</kbd>/<kbd>↓</kbd> move between items; <kbd>+</kbd>/<kbd>−</kbd> step by one.</span></div>
     <div class="pk-prog">
       <div class="pk-prog-track"><i id="pk-prog-bar"></i></div>
@@ -1291,6 +1295,12 @@ function updatePickSummary() {
   set('pk-t-complete', complete + ' / ' + ctx.lines.length);
   set('pk-t-picked', picked + ' / ' + ctx.totalDue);
   set('pk-t-remaining', Math.max(0, ctx.totalDue - picked));
+  // Header counter (under the order id): units picked + completed lines (Option A:
+  // a line counts only once its full due qty is picked, matching `complete`).
+  set('pk-hd-units', picked + ' / ' + ctx.totalDue);
+  set('pk-hd-lines', complete + ' / ' + ctx.lines.length);
+  const uc = document.getElementById('pk-hd-units-chip'); if (uc) uc.classList.toggle('done', ctx.totalDue > 0 && picked >= ctx.totalDue);
+  const lc = document.getElementById('pk-hd-lines-chip'); if (lc) lc.classList.toggle('done', complete === ctx.lines.length);
   const pct = ctx.totalDue ? Math.round(picked / ctx.totalDue * 100) : 0;
   const bar = document.getElementById('pk-prog-bar'); if (bar) bar.style.width = pct + '%';
   set('pk-prog-txt', complete + ' of ' + ctx.lines.length + ' items done');
