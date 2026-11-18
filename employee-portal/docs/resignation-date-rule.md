@@ -9,8 +9,12 @@ Configured on the **Lifecycle → Resignation date policy** card; stored in `por
 
 | Key | Meaning | Default |
 |---|---|---|
-| `resign_allow_future` | `0` = OFF, `1` = ON | `0` (OFF) |
+| `resign_allow_future` | `0` = OFF (past), `1` = ON (today/future) | `1` (ON) — set by migration `0027` |
 | `resign_max_future_days` | upper bound in days when ON (1–365) | `90` |
+
+> Default note: migration `0026` seeded this OFF per the original spec; migration `0027` flipped the
+> live default to **ON** (today/future) at the product owner's request, so employees pick today or a
+> later date and past dates are greyed. Admins can switch back to OFF on the policy card.
 
 Every change requires a **mandatory reason** and is audited (`CONFIG_RESIGN_DATE`: previous → new
 values, admin user, timestamp, reason).

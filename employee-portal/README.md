@@ -519,8 +519,8 @@ intervals, clearance departments, clearance auto-days) — nothing is hardcoded.
   escalation after `resign_escalate_days` (5), and LWD reminders at `resign_lwd_reminders`
   (15/7/3/1). HR sees them on the Lifecycle **Reminders** card (with a **Run now** button) and an
   action-centre count. Delivery is in-app (no email/push channel is configured yet).
-- **Date rule is an admin setting** (migration `0026`, spec in `docs/resignation-date-rule.md`): a
-  **toggle** `resign_allow_future` (default OFF = yesterday-or-earlier; ON = today … today+N) and
+- **Date rule is an admin setting** (migrations `0026`/`0027`, spec in `docs/resignation-date-rule.md`): a
+  **toggle** `resign_allow_future` (**default ON** = today … today+N; OFF = yesterday-or-earlier) and
   `resign_max_future_days` (default 90), set on the Lifecycle **Resignation date policy** card
   (super_admin / HR Admin) with a mandatory reason and full audit. Both the picker and the server
   read the same `portal_config` values (no hardcoding); IST, date-only; enforced at UI + submit +
