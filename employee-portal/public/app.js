@@ -449,6 +449,7 @@ Object.assign(DICT.en, {
   maxFutureLbl: "Maximum future days (1–365)", saveSetting: "Save setting", currentMode: "Current", modePast: "Off — yesterday or earlier", modeFuture: "On — today up to +{n} days",
   dateHelpPast: "Pick yesterday or an earlier date.", dateHelpFuture: "Pick today up to {n} days from today.",
   notBeforeToday: "Resignation date cannot be earlier than today.", maxFutureMsg: "Resignation date cannot be more than {n} days from today.",
+  dpPrev: "Previous month", dpNext: "Next month",
 });
 Object.assign(DICT.kn, {
   rstat_pending_manager: "ಮೇಲಧಿಕಾರಿ ಬಾಕಿ", rstat_pending_hr: "HR ಬಾಕಿ", rstat_notice_period: "ನೋಟಿಸ್ ಅವಧಿ",
@@ -477,6 +478,7 @@ Object.assign(DICT.kn, {
   maxFutureLbl: "ಗರಿಷ್ಠ ಭವಿಷ್ಯದ ದಿನಗಳು (1–365)", saveSetting: "ಸೆಟ್ಟಿಂಗ್ ಉಳಿಸಿ", currentMode: "ಪ್ರಸ್ತುತ", modePast: "ಆಫ್ — ನಿನ್ನೆ ಅಥವಾ ಹಿಂದಿನದು", modeFuture: "ಆನ್ — ಇಂದಿನಿಂದ +{n} ದಿನಗಳವರೆಗೆ",
   dateHelpPast: "ನಿನ್ನೆ ಅಥವಾ ಅದಕ್ಕಿಂತ ಹಿಂದಿನ ದಿನಾಂಕ ಆರಿಸಿ.", dateHelpFuture: "ಇಂದಿನಿಂದ {n} ದಿನಗಳವರೆಗೆ ಆರಿಸಿ.",
   notBeforeToday: "ರಾಜೀನಾಮೆ ದಿನಾಂಕ ಇಂದಿಗಿಂತ ಹಿಂದಿನದಾಗಿರಬಾರದು.", maxFutureMsg: "ರಾಜೀನಾಮೆ ದಿನಾಂಕ ಇಂದಿನಿಂದ {n} ದಿನಗಳಿಗಿಂತ ಹೆಚ್ಚು ಆಗಿರಬಾರದು.",
+  dpPrev: "ಹಿಂದಿನ ತಿಂಗಳು", dpNext: "ಮುಂದಿನ ತಿಂಗಳು",
 });
 Object.assign(DICT.hi, {
   rstat_pending_manager: "प्रबंधक लंबित", rstat_pending_hr: "HR लंबित", rstat_notice_period: "नोटिस अवधि",
@@ -505,6 +507,7 @@ Object.assign(DICT.hi, {
   maxFutureLbl: "अधिकतम भविष्य दिन (1–365)", saveSetting: "सेटिंग सहेजें", currentMode: "वर्तमान", modePast: "बंद — कल या उससे पहले", modeFuture: "चालू — आज से +{n} दिन तक",
   dateHelpPast: "कल या उससे पहले की तिथि चुनें।", dateHelpFuture: "आज से {n} दिन तक चुनें।",
   notBeforeToday: "इस्तीफ़ा तिथि आज से पहले की नहीं हो सकती।", maxFutureMsg: "इस्तीफ़ा तिथि आज से {n} दिन से अधिक नहीं हो सकती।",
+  dpPrev: "पिछला माह", dpNext: "अगला माह",
 });
 
 // FR-04 Approvals + inline-help strings.
@@ -3034,6 +3037,43 @@ async function loadFnF(employeeId, containerId) {
     card.appendChild(el("div", { class: "msg", style: "font-size:11px;margin-top:8px;background:color-mix(in srgb,var(--warn) 10%,var(--card));color:var(--warn)", text: w.disclaimer }));
   } catch (ex) { clear(card); card.appendChild(el("div", { class: "msg err", text: ex.message })); }
 }
+// Accessible date picker for the resignation date: out-of-range days are dimmed AND marked
+// aria-disabled (not just dimmed) and are not selectable, per the date-policy spec. Returns an
+// object with a live `.value`. `min`/`max` are inclusive YYYY-MM-DD bounds (min may be null).
+function buildDatePicker(opts) {
+  const st = { sel: opts.value || "", view: (opts.value || opts.min || opts.max || istToday()).slice(0, 7) };
+  const wrap = el("div", { class: "dp" });
+  const clampView = (ym, delta) => { let [y, m] = ym.split("-").map(Number); m += delta; while (m < 1) { m += 12; y--; } while (m > 12) { m -= 12; y++; } return `${y}-${String(m).padStart(2, "0")}`; };
+  function render() {
+    clear(wrap);
+    const [y, m] = st.view.split("-").map(Number);
+    const title = new Intl.DateTimeFormat(curLocale(), { month: "long", year: "numeric" }).format(new Date(Date.UTC(y, m - 1, 1)));
+    wrap.appendChild(el("div", { class: "dp-head" }, [
+      el("button", { class: "sm", type: "button", "aria-label": t("dpPrev") || "Previous month", text: "‹", onclick: () => { st.view = clampView(st.view, -1); render(); } }),
+      el("div", { class: "dp-title", text: title }),
+      el("button", { class: "sm", type: "button", "aria-label": t("dpNext") || "Next month", text: "›", onclick: () => { st.view = clampView(st.view, 1); render(); } }),
+    ]));
+    const dow = [t("sun"), t("mon"), t("tue"), t("wed"), t("thu"), t("fri"), t("sat")];
+    wrap.appendChild(el("div", { class: "dp-grid dp-dow" }, dow.map((d) => el("div", { class: "dp-cell dp-h", text: d }))));
+    const startDow = new Date(Date.UTC(y, m - 1, 1)).getUTCDay();
+    const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    const cells = [];
+    for (let i = 0; i < startDow; i++) cells.push(el("div", { class: "dp-cell dp-blank", "aria-hidden": "true" }));
+    for (let d = 1; d <= daysInMonth; d++) {
+      const iso = `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+      const disabled = (opts.min && iso < opts.min) || (opts.max && iso > opts.max);
+      const selected = iso === st.sel;
+      const cell = el("button", { type: "button", class: "dp-cell dp-day" + (disabled ? " dp-off" : "") + (selected ? " dp-sel" : ""), text: String(d), "aria-disabled": disabled ? "true" : "false", ...(selected ? { "aria-current": "date" } : {}) });
+      if (disabled) { cell.disabled = true; }
+      else cell.addEventListener("click", () => { st.sel = iso; render(); if (opts.onChange) opts.onChange(iso); });
+      cells.push(cell);
+    }
+    wrap.appendChild(el("div", { class: "dp-grid", role: "grid" }, cells));
+  }
+  render();
+  return { el: wrap, get value() { return st.sel; } };
+}
+
 // Employee self-service resignation card + progress tracker (My profile).
 async function loadResignCard() {
   const card = document.getElementById("resign_card"); if (!card) return;
@@ -3068,36 +3108,37 @@ async function loadResignCard() {
     }
     // tender form — picker min/max/default and validation come from the admin date policy (one source).
     const pol = await api("/api/lifecycle/date-policy"); // {allowFuture, maxFutureDays, min, max, default, today}
-    const dateAttrs = { type: "date", value: pol.default, max: pol.max };
-    if (pol.min) dateAttrs.min = pol.min; // out-of-range dates are disabled/greyed by the native picker
-    const date = el("input", dateAttrs);
+    const n = state.emp && state.emp.noticePeriodDays != null ? state.emp.noticePeriodDays : 60;
+    const lwdPreview = el("div", { class: "muted", style: "font-size:12px;margin-top:4px" });
+    const updatePreview = (v) => { lwdPreview.textContent = v ? `${t("expectedLwd")}: ${fmtDate(addDaysISOc(v, n))} (${n} ${t("daysWord")})` : ""; };
+    // Accessible calendar: out-of-range days are dimmed + aria-disabled + unselectable.
+    const picker = buildDatePicker({ value: pol.default, min: pol.min, max: pol.max, onChange: updatePreview });
+    updatePreview(picker.value);
     const dateHelp = el("div", { class: "muted", style: "font-size:11px;margin-top:2px", text: pol.allowFuture ? t("dateHelpFuture").replace("{n}", pol.maxFutureDays) : t("dateHelpPast") });
     const reasonSel = el("select", {});
     reasonSel.appendChild(el("option", { value: "", text: "—" }));
     for (const rc of RESIGN_REASONS) reasonSel.appendChild(el("option", { value: rc, text: t("rreason_" + rc) }));
     const remarks = el("input", { placeholder: t("remarksOptional") });
-    const n = state.emp && state.emp.noticePeriodDays != null ? state.emp.noticePeriodDays : 60;
-    const lwdPreview = el("div", { class: "muted", style: "font-size:12px;margin-top:4px" });
-    const updatePreview = () => { lwdPreview.textContent = date.value ? `${t("expectedLwd")}: ${fmtDate(addDaysISOc(date.value, n))} (${n} ${t("daysWord")})` : ""; };
-    date.addEventListener("input", updatePreview); updatePreview();
     const submit = el("button", { class: "primary sm", text: t("tenderResign") });
     submit.addEventListener("click", async () => {
       if (!reasonSel.value) { flash("err", t("reasonRequired")); return; }
+      const dv = picker.value;
       // Re-validate at submit against the active mode (handles a form left open across a setting change).
-      if (!date.value) { flash("err", pol.allowFuture ? t("notBeforeToday") : t("dateYestOrEarlier")); return; }
+      if (!dv) { flash("err", pol.allowFuture ? t("notBeforeToday") : t("dateYestOrEarlier")); return; }
       if (pol.allowFuture) {
-        if (date.value < pol.today) { flash("err", t("notBeforeToday")); return; }
-        if (date.value > pol.max) { flash("err", t("maxFutureMsg").replace("{n}", pol.maxFutureDays)); return; }
-      } else if (date.value >= pol.today) { flash("err", t("dateYestOrEarlier")); return; }
+        if (dv < pol.today) { flash("err", t("notBeforeToday")); return; }
+        if (dv > pol.max) { flash("err", t("maxFutureMsg").replace("{n}", pol.maxFutureDays)); return; }
+      } else if (dv >= pol.today) { flash("err", t("dateYestOrEarlier")); return; }
       if (!confirm(t("tenderConfirm"))) return;
       submit.disabled = true;
-      try { await api("/api/lifecycle/resign", { method: "POST", body: { resignationDate: date.value, reasonCode: reasonSel.value, reason: remarks.value } }); flash("ok", t("resignSubmitted")); loadResignCard(); }
+      try { await api("/api/lifecycle/resign", { method: "POST", body: { resignationDate: dv, reasonCode: reasonSel.value, reason: remarks.value } }); flash("ok", t("resignSubmitted")); loadResignCard(); }
       catch (ex) { flash("err", ex.message); submit.disabled = false; }
     });
     const fr = (l, f) => el("div", {}, [el("label", { text: l }), f]);
     card.appendChild(el("div", { class: "muted", style: "font-size:12px;margin-bottom:6px", text: t("noticeOnFile").replace("{n}", n) }));
     card.appendChild(fr(t("resignReasonLbl"), reasonSel));
-    card.appendChild(fr(t("tenderDate"), date));
+    card.appendChild(el("label", { text: t("tenderDate") }));
+    card.appendChild(picker.el);
     card.appendChild(dateHelp);
     card.appendChild(fr(t("remarksOptional"), remarks));
     card.appendChild(lwdPreview);
