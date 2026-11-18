@@ -2311,7 +2311,7 @@ async function submitDraftOrder(id) {
 async function confirmSubmitDraft(id) {
   const res = await api(`/orders/${id}/transition`, { method:'POST', body: JSON.stringify({ to:'SUBMITTED', note:'Draft submitted by client' }) });
   closeModal();
-  if (res) { showToast(`Order ${id} submitted to 4SYZ`); navigate('my_orders'); }
+  if (res) { showToast(`Order ${id} submitted to 4SYZ`); navigate(draftListPage()); }
 }
 
 /* ============================================================
@@ -2342,10 +2342,16 @@ function clearDraftEditState() {
   try { persistCart(); } catch (_) { /* ignore */ }
 }
 
+// Where to land after a draft edit — clients have "My Orders", ops the Order Queue.
+// (navigate() to a page the role can't access shows "not available for your role".)
+function draftListPage() {
+  return ['client_admin', 'client_user', 'client_approver'].includes(APP.user?.role || '') ? 'my_orders' : 'orders';
+}
+
 async function editDraftOrder(id, force) {
   const order = await api('/orders/' + id);
   if (!order || order.error) { showToast(`Could not load draft ${id}`, 'error'); return; }
-  if (order.status !== 'DRAFT') { showToast('Only a draft order can be edited.', 'error'); navigate('my_orders'); return; }
+  if (order.status !== 'DRAFT') { showToast('Only a draft order can be edited.', 'error'); navigate(draftListPage()); return; }
 
   // Replacing a non-empty working cart is a destructive step — confirm first.
   if (!force && Array.isArray(APP.cart) && APP.cart.length) {
@@ -2408,7 +2414,7 @@ async function saveDraftEdits() {
   if (res && !res.error) {
     clearDraftEditState();
     showToast(`Draft ${ed.id} updated`);
-    navigate('my_orders');
+    navigate(draftListPage());
   } else if (btn) { btn.disabled = false; btn.textContent = '💾 Save draft changes'; }
 }
 
@@ -2436,7 +2442,7 @@ async function confirmSubmitDraftEdits() {
   if (res && !res.error) {
     clearDraftEditState();
     showToast(`Order ${ed.id} submitted to 4SYZ`);
-    navigate('my_orders');
+    navigate(draftListPage());
   }
 }
 
@@ -2444,7 +2450,7 @@ function cancelDraftEdit() {
   const ed = restoreEditingDraft();
   clearDraftEditState();
   showToast(ed ? `Edit discarded — draft ${ed.id} is unchanged` : 'Edit discarded');
-  navigate('my_orders');
+  navigate(draftListPage());
 }
 
 /* ── Ad-hoc pricing (Ops): set unit prices on a PENDING_PRICING order ── */
