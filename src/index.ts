@@ -7114,6 +7114,7 @@ export default {
       if (path.match(/^\/api\/quotes\/[^/]+$/) && method==="GET")  return handleQuoteDetail(request,env,path.split("/")[3]);
       if (path.match(/^\/api\/quotes\/[^/]+$/) && method==="PUT")  return handleQuoteEdit(request,env,path.split("/")[3]);
       if (path.match(/^\/api\/orders\/[^/]+\/items\/[^/]+\/delay$/) && method==="PATCH") return handleSetOrderItemDelay(request,env,path);
+      if (path.match(/^\/api\/orders\/[^/]+\/items$/) && method==="PUT")   return handleUpdateDraftItems(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+$/) && method==="GET")   return handleGetOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+$/) && method==="PATCH") return handlePatchOrder(request,env,path);
       if (path==="/api/pipeline"               && method==="GET")  return handlePipeline(request,env);
@@ -7923,6 +7924,7 @@ async function handleClientOrderView(request: Request, env: Env, path: string): 
     order_period: order.order_period || null,
     created_at: order.created_at,
     approved, cancelled,
+    is_draft: status === "DRAFT",
     awaiting_amendment_approval: !!amendment,
     amendment,
     predicted_delivery_date: order.predicted_delivery_date || null,
@@ -9774,6 +9776,73 @@ async function assignOrderIndex(env: Env, order: Record<string, unknown>, opts: 
   return { month, seq, manual };
 }
 const INDEX_STAFF_ROLES = ["super_admin", "ops_admin", "ops_manager", "procurement_manager"];
+
+// PUT /api/orders/:id/items — replace the line items of a DRAFT order (the
+// pre-submission "edit draft" flow, for clients and ops alike). Only a DRAFT is
+// editable here; once an order is SUBMITTED it changes through the amendment +
+// approval flow instead. Ownership is enforced by denyClientCrossAccess (a client
+// role can only touch its own client's draft; ops/admin may edit any). Totals
+// (subtotal, per-item GST, grand total) are always recomputed server-side — the
+// client never sets the tax — and the edit is written atomically with an audit row.
+async function handleUpdateDraftItems(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user);
+  if (denied) return denied;
+  const id = path.split("/").slice(-2)[0];
+
+  const order = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).first() as Record<string, unknown> | null;
+  if (!order) return json({ error: "Not found" }, 404);
+  const cross = await denyClientCrossAccess(env, user!, order.client_id); if (cross) return cross;
+  if (String(order.status) !== "DRAFT")
+    return json({ error: "Only a draft order can be edited. A submitted order is changed through an amendment.", code: "E_NOT_DRAFT" }, 409);
+
+  const body = await request.json() as {
+    items?: Array<{ sku: string; name: string; qty: number; unit_price: number; note?: string }>;
+    notes?: string;
+    order_type?: string;
+    need_by_date?: string;
+    order_period?: string;
+  };
+
+  // Sanitise the lines (never trust client qty/price shape); keep the per-line note.
+  const rawItems = Array.isArray(body.items) ? body.items : [];
+  const items = rawItems.slice(0, 300).map((r) => {
+    const i = (r || {}) as Record<string, unknown>;
+    return {
+      sku: String(i.sku ?? "").slice(0, 80),
+      name: String(i.name ?? "").slice(0, 200),
+      qty: Math.max(0, Math.min(100000, Math.floor(Number(i.qty) || 0))),
+      unit_price: Math.max(0, Number(i.unit_price) || 0),
+      note: (typeof i.note === "string" && i.note.trim()) ? i.note.trim().slice(0, 500) : null,
+    };
+  }).filter((i) => i.sku && i.qty > 0);
+  if (!items.length) return json({ error: "A draft needs at least one item with a quantity." }, 400);
+
+  const subtotal = items.reduce((s, i) => s + i.qty * i.unit_price, 0);
+  const gst = await computeOrderGst(env, items);
+  const grand_total = subtotal + gst;
+
+  const notesVal = typeof body.notes === "string" ? body.notes.slice(0, 2000) : ((order.notes as string) ?? null);
+  const validTypes = ['Regular', 'Urgent', 'Ad-Hoc'];
+  const orderType = validTypes.includes(body.order_type || '') ? body.order_type! : String(order.order_type || 'Regular');
+  const needByDate = typeof body.need_by_date === "string" ? (body.need_by_date || null) : ((order.need_by_date as string) ?? null);
+  const orderPeriod = /^\d{4}-\d{2}$/.test(body.order_period || "") ? body.order_period! : ((order.order_period as string) ?? null);
+
+  const stmts = [env.DB.prepare("DELETE FROM order_items WHERE order_id=?").bind(id)];
+  for (const item of items) {
+    stmts.push(env.DB.prepare("INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total,item_note) VALUES (?,?,?,?,?,?,?,?)")
+      .bind(uid(), id, item.sku, item.name, item.qty, item.unit_price, item.qty * item.unit_price, item.note));
+  }
+  // Compare-and-swap guard on status keeps a concurrent submit from racing the edit.
+  stmts.push(env.DB.prepare("UPDATE orders SET subtotal=?,gst=?,grand_total=?,notes=?,order_type=?,need_by_date=?,order_period=?,updated_at=datetime('now') WHERE id=? AND status='DRAFT'")
+    .bind(subtotal, gst, grand_total, notesVal, orderType, needByDate, orderPeriod, id));
+  stmts.push(env.DB.prepare("INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)")
+    .bind(uid(), id, "DRAFT", "DRAFT", user!.sub, user!.name, `Draft edited — ${items.length} line${items.length === 1 ? '' : 's'}`));
+  await env.DB.batch(stmts);
+
+  await audit(env, user, "UPDATE", "order", id, undefined, `draft edit: ${items.length} lines, total:${grand_total}`);
+  return json({ id, status: "DRAFT", subtotal, gst, grand_total, item_count: items.length });
+}
 
 async function handleTransitionOrder(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env);

@@ -15,6 +15,8 @@ async function renderPlaceOrder(el) {
   if (!APP._catalogView) APP._catalogView = 'tile';
   if (!APP._orderType) APP._orderType = 'Regular';
   APP._orderStep = 'catalogue';
+  // Resume an in-progress draft edit across a refresh: rebind and land on Review.
+  if (typeof restoreEditingDraft === 'function' && restoreEditingDraft() && !APP._postNavStep) APP._postNavStep = 'review';
 
   const last3 = (recentOrders||[]).slice(0,3);
 
@@ -187,10 +189,21 @@ function switchOrderStep(step) {
 function renderCartReview(container) {
   const isUrgent = (APP._orderType||'Regular') === 'Urgent';
   const today = new Date().toISOString().slice(0,10);
+  const ed = APP._editingDraft || null;
+  const editBanner = ed ? `
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:var(--amber-bg,#fff8e1);border:1px solid #fcd34d;border-radius:10px;padding:12px 16px;margin-bottom:16px">
+      <span style="font-size:1.35rem">✏️</span>
+      <div style="flex:1;min-width:180px">
+        <div style="font-weight:800;color:var(--navy);font-size:.92rem">Editing draft ${h(ed.id)}</div>
+        <div style="font-size:.78rem;color:var(--text-muted)">Changes save back to this draft — this won't create a new order.${ed.priceChanged ? ` <span style="color:#b45309;font-weight:700">· ${ed.priceChanged} line${ed.priceChanged===1?'':'s'} repriced to the current catalogue.</span>` : ''}</div>
+      </div>
+      <button class="btn btn-secondary btn-sm" ${dataAct('cancelDraftEdit')}>Discard changes</button>
+    </div>` : '';
   container.innerHTML = `
+    ${editBanner}
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:10px">
       <div>
-        <button class="btn btn-secondary btn-sm" ${dataAct('switchOrderStep', 'catalogue')}>← Back to Catalogue</button>
+        <button class="btn btn-secondary btn-sm" ${dataAct('switchOrderStep', 'catalogue')}>← ${ed ? 'Add / change items' : 'Back to Catalogue'}</button>
       </div>
       <div style="display:flex;align-items:center;gap:10px;font-size:.84rem">
         <span class="u-muted">① Browse</span>
@@ -264,11 +277,19 @@ function renderCartReview(container) {
           <div style="padding:14px 18px;border-bottom:1px solid var(--border)"><b>Order Summary</b></div>
           <div style="padding:16px 18px" id="review-summary"></div>
           <div style="padding:0 18px 18px;display:flex;flex-direction:column;gap:8px">
+            ${ed ? `
+            <button class="btn btn-gold" style="width:100%;padding:11px;font-size:.95rem" ${dataAct('submitDraftEdits')}>
+              ${iconCheck(14)} Submit Order
+            </button>
+            <button class="btn btn-secondary" style="width:100%;font-size:.83rem" ${dataAct('saveDraftEdits')}>💾 Save draft changes</button>
+            <button class="btn btn-secondary" style="width:100%;font-size:.8rem;color:var(--danger);border-color:#fca5a5" ${dataAct('cancelDraftEdit')}>Discard changes</button>
+            ` : `
             <button class="btn btn-gold" style="width:100%;padding:11px;font-size:.95rem" ${dataAct('submitOrder')}>
               ${iconCheck(14)} Place Order
             </button>
             <button class="btn btn-secondary" style="width:100%;font-size:.83rem" ${dataAct('saveDraft')}>Save as Draft</button>
             <button class="btn btn-secondary" style="width:100%;font-size:.8rem;color:var(--danger);border-color:#fca5a5" ${dataAct('clearCartToCatalogue')}>Clear Cart</button>
+            `}
           </div>
         </div>
       </div>

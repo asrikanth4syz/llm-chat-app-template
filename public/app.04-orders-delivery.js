@@ -249,7 +249,8 @@ async function renderMyOrders(el) {
         <td class="num col-updated u-muted">${r.updated_at?fmtDate(r.updated_at):'—'}</td>
         <td class="col-act"><div class="mo-acts">
           <button class="btn btn-secondary btn-sm" ${dataAct('viewOrder', r.id)}>View</button>
-          ${r.status==='DRAFT'?`<button class="btn btn-gold btn-sm" ${dataAct('submitDraftOrder', r.id)}>Submit</button>`:''}
+          ${r.status==='DRAFT'?`<button class="btn btn-gold btn-sm" ${dataAct('editDraftOrder', r.id)}>✏️ Edit</button>`:''}
+          ${r.status==='DRAFT'?`<button class="btn btn-secondary btn-sm" ${dataAct('submitDraftOrder', r.id)}>Submit</button>`:''}
           ${(r.status==='DRAFT'||r.status==='SUBMITTED')?`<button class="btn btn-secondary btn-sm mo-cancel" ${dataAct('cancelOrder', r.id)}>Cancel</button>`:''}
         </div></td>
       </tr>`;
@@ -259,7 +260,8 @@ async function renderMyOrders(el) {
       const items = r.item_count!=null ? r.item_count : (r.items||[]).length;
       const acts = [
         `<button class="btn btn-secondary btn-sm" ${dataAct('viewOrder', r.id)}>View</button>`,
-        r.status==='DRAFT' ? `<button class="btn btn-gold btn-sm" ${dataAct('submitDraftOrder', r.id)}>Submit</button>` : '',
+        r.status==='DRAFT' ? `<button class="btn btn-gold btn-sm" ${dataAct('editDraftOrder', r.id)}>✏️ Edit</button>` : '',
+        r.status==='DRAFT' ? `<button class="btn btn-secondary btn-sm" ${dataAct('submitDraftOrder', r.id)}>Submit</button>` : '',
         (r.status==='DRAFT'||r.status==='SUBMITTED') ? `<button class="btn btn-secondary btn-sm mo-cancel" ${dataAct('cancelOrder', r.id)}>Cancel</button>` : '',
         (r.status!=='DRAFT'&&r.status!=='CANCELLED') ? `<button class="btn btn-secondary btn-sm" ${dataAct('reorderFromHistory', r.id)}>Reorder</button>` : '',
       ].filter(Boolean).join('');
@@ -1120,8 +1122,10 @@ async function viewOrder(id) {
         if (!['CLOSED','CANCELLED'].includes(s))
           footer.push(`<button class="btn btn-danger" ${dataActClose('opsRejectOrder', id)}>Cancel Order</button>`);
       } else {
-        if (s==='DRAFT')
-          footer.push(`<button class="btn btn-gold btn-sm" ${dataActClose('submitDraftOrder', id)}>Submit Order</button>`);
+        if (s==='DRAFT') {
+          footer.push(`<button class="btn btn-gold btn-sm" ${dataActClose('editDraftOrder', id)}>✏️ Edit Draft</button>`);
+          footer.push(`<button class="btn btn-secondary btn-sm" ${dataActClose('submitDraftOrder', id)}>Submit Order</button>`);
+        }
         if (s==='SUBMITTED'||s==='APPROVED')
           footer.push(`<button class="btn btn-danger btn-sm" ${dataActClose('cancelOrder', id)}>Cancel Order</button>`);
       }
@@ -1985,6 +1989,27 @@ async function renderClientOrder(el) {
   }
   APP._coOrder = o;
 
+  // A draft is pre-submission — show a clear "continue editing / submit" landing
+  // rather than the delivery-tracking UI (which is meaningless before submission).
+  if (o.is_draft) {
+    const dPeriod = o.order_period ? new Date(o.order_period + '-01').toLocaleDateString('en-IN', { month: 'short', year: 'numeric' }) : '';
+    el.innerHTML = `
+      <div style="max-width:680px;margin:0 auto">
+        <button class="btn btn-secondary btn-sm" ${dataAct('clientBackToOrders')}>← Back to My Orders</button>
+        <div class="card" style="padding:30px 28px;text-align:center;margin-top:16px">
+          <div style="font-size:2.6rem">📝</div>
+          <div style="font-weight:800;color:var(--navy);font-size:1.15rem;margin-top:10px">Draft ${h(o.id)}</div>
+          <div style="color:var(--text-muted);font-size:.88rem;margin-top:6px;line-height:1.5">This order hasn't been submitted yet. Continue editing it to add or change items, or submit it to 4SYZ for processing.${dPeriod ? `<br>Order for <b>${dPeriod}</b>.` : ''}</div>
+          <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:22px">
+            <button class="btn btn-gold" ${dataAct('editDraftOrder', o.id)}>✏️ Edit draft</button>
+            <button class="btn btn-secondary" ${dataAct('submitDraftOrder', o.id)}>Submit to 4SYZ</button>
+            <button class="btn btn-secondary" style="color:var(--danger);border-color:#fca5a5" ${dataAct('cancelOrder', o.id)}>Delete draft</button>
+          </div>
+        </div>
+      </div>`;
+    return;
+  }
+
   const lines = (o.items || []).map(i => ({ name: i.name, ordered: Number(i.ordered) || 0, delivered: Number(i.delivered) || 0, due: Number(i.due) || 0 }));
   const recon = window.oreconTotals(lines);
   let cFull = 0, cPart = 0, cPend = 0;
@@ -2285,6 +2310,139 @@ async function confirmSubmitDraft(id) {
   const res = await api(`/orders/${id}/transition`, { method:'POST', body: JSON.stringify({ to:'SUBMITTED', note:'Draft submitted by client' }) });
   closeModal();
   if (res) { showToast(`Order ${id} submitted to 4SYZ`); navigate('my_orders'); }
+}
+
+/* ============================================================
+   EDIT DRAFT ORDER — resume a DRAFT in the ordering cart, then
+   Save (stays DRAFT) or Submit. Works for clients and ops alike;
+   the backend guards access + the DRAFT-only rule. The cart is the
+   single editing surface (same as placing a new order), bound to
+   the draft id via APP._editingDraft (persisted across refresh).
+   ============================================================ */
+function setEditingDraft(obj) {
+  APP._editingDraft = obj || null;
+  try {
+    if (obj) sessionStorage.setItem('sp_edit_draft', JSON.stringify(obj));
+    else sessionStorage.removeItem('sp_edit_draft');
+  } catch (_) { /* private mode / blocked storage — in-memory state still works */ }
+}
+
+// Restore the editing binding after a page refresh (called from renderPlaceOrder).
+function restoreEditingDraft() {
+  if (APP._editingDraft) return APP._editingDraft;
+  try { const s = sessionStorage.getItem('sp_edit_draft'); if (s) APP._editingDraft = JSON.parse(s); } catch (_) { /* ignore */ }
+  return APP._editingDraft || null;
+}
+
+function clearDraftEditState() {
+  setEditingDraft(null);
+  APP.cart = [];
+  try { persistCart(); } catch (_) { /* ignore */ }
+}
+
+async function editDraftOrder(id, force) {
+  const order = await api('/orders/' + id);
+  if (!order || order.error) { showToast(`Could not load draft ${id}`, 'error'); return; }
+  if (order.status !== 'DRAFT') { showToast('Only a draft order can be edited.', 'error'); navigate('my_orders'); return; }
+
+  // Replacing a non-empty working cart is a destructive step — confirm first.
+  if (!force && Array.isArray(APP.cart) && APP.cart.length) {
+    openModal('Replace your cart?',
+      `<p class="u-muted">Your cart has ${APP.cart.length} item${APP.cart.length === 1 ? '' : 's'} in it. Opening draft <b>${h(id)}</b> for editing will replace the cart with this draft's items.</p>`,
+      `<button class="btn btn-secondary" ${dataAct('closeModal')}>Keep my cart</button>
+       <button class="btn btn-gold" ${dataActClose('editDraftOrder', id, true)}>Replace &amp; edit</button>`);
+    return;
+  }
+
+  // Load the draft's lines, re-resolving each against the LIVE catalogue so a stale
+  // saved price can never be submitted. Fetch the catalogue if we don't have it yet.
+  if (!Array.isArray(APP._catalog) || !APP._catalog.length) {
+    APP._catalog = await api('/inventory').catch(() => []) || [];
+  }
+  let priceChanged = 0;
+  APP.cart = (order.items || []).map(it => {
+    const cat = (APP._catalog || []).find(c => c.sku === it.sku || c.name === it.name);
+    const livePrice = cat ? Number(cat.unit_price) : (Number(it.unit_price) || 0);
+    if (cat && Math.abs(livePrice - (Number(it.unit_price) || 0)) > 0.009) priceChanged++;
+    return {
+      sku: it.sku || it.name,
+      name: it.name,
+      qty: Number(it.qty) || 0,
+      unit_price: livePrice || 0,
+      emoji: (cat && cat.emoji) || '📦',
+      ...(it.item_note ? { note: it.item_note } : {}),
+    };
+  }).filter(c => c.sku && c.qty > 0);
+  try { persistCart(); } catch (_) { /* ignore */ }
+
+  APP._orderType = order.order_type || 'Regular';
+  setEditingDraft({ id: order.id, ref: order.order_reference || order.id, priceChanged, notes: order.notes || '' });
+  APP._postNavStep = 'review';
+  navigate('place_order');
+}
+
+// Collect the cart + options into the PUT body shared by save and submit.
+function draftEditPayload() {
+  const notes = document.getElementById('cart-notes')?.value?.trim() || '';
+  const orderType = APP._orderType || 'Regular';
+  const needByDate = document.getElementById('cart-need-by')?.value || '';
+  const orderPeriod = document.getElementById('cart-order-period')?.value || '';
+  return {
+    items: APP.cart,
+    order_type: orderType,
+    ...(notes ? { notes } : {}),
+    ...(needByDate ? { need_by_date: needByDate } : {}),
+    ...(orderPeriod ? { order_period: orderPeriod } : {}),
+  };
+}
+
+async function saveDraftEdits() {
+  const ed = restoreEditingDraft();
+  if (!ed) return;
+  if (!APP.cart.length) { showToast('A draft needs at least one item.', 'error'); return; }
+  const btn = document.querySelector('[data-act="saveDraftEdits"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  const res = await api(`/orders/${ed.id}/items`, { method: 'PUT', body: JSON.stringify(draftEditPayload()) });
+  if (res && !res.error) {
+    clearDraftEditState();
+    showToast(`Draft ${ed.id} updated`);
+    navigate('my_orders');
+  } else if (btn) { btn.disabled = false; btn.textContent = '💾 Save draft changes'; }
+}
+
+function submitDraftEdits() {
+  const ed = restoreEditingDraft();
+  if (!ed) return;
+  if (!APP.cart.length) { showToast('A draft needs at least one item.', 'error'); return; }
+  const grand = APP.cart.reduce((s, i) => s + i.qty * i.unit_price, 0) * 1.18; // display only; server recomputes exact GST
+  openModal(`Submit Order ${ed.id}`,
+    `<p class="u-muted" style="margin-bottom:10px">Save your changes and submit draft <b>${h(ed.id)}</b> to 4SYZ for processing?</p>
+     <div class="cart-row cart-total"><span>Approx. total</span><span>${fmt(grand)}</span></div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Not yet</button>
+     <button class="btn btn-gold" ${dataAct('confirmSubmitDraftEdits')}>Save &amp; Submit</button>`);
+}
+
+async function confirmSubmitDraftEdits() {
+  const ed = restoreEditingDraft();
+  if (!ed) { closeModal(); return; }
+  const btn = document.querySelector('#modal-footer .btn-gold');
+  if (btn) { btn.disabled = true; btn.textContent = 'Submitting…'; }
+  const saved = await api(`/orders/${ed.id}/items`, { method: 'PUT', body: JSON.stringify(draftEditPayload()) });
+  if (!saved || saved.error) { if (btn) { btn.disabled = false; btn.textContent = 'Save & Submit'; } return; }
+  const res = await api(`/orders/${ed.id}/transition`, { method: 'POST', body: JSON.stringify({ to: 'SUBMITTED', note: 'Draft submitted after edit' }) });
+  closeModal();
+  if (res && !res.error) {
+    clearDraftEditState();
+    showToast(`Order ${ed.id} submitted to 4SYZ`);
+    navigate('my_orders');
+  }
+}
+
+function cancelDraftEdit() {
+  const ed = restoreEditingDraft();
+  clearDraftEditState();
+  showToast(ed ? `Edit discarded — draft ${ed.id} is unchanged` : 'Edit discarded');
+  navigate('my_orders');
 }
 
 /* ── Ad-hoc pricing (Ops): set unit prices on a PENDING_PRICING order ── */
