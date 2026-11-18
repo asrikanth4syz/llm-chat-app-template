@@ -807,7 +807,10 @@ async function confirmCreateDCFromPicklist(orderId) {
   // reflect IN_SHIPMENT immediately (otherwise a second click re-fires the same
   // transition and the FSM rejects IN_SHIPMENT→IN_SHIPMENT).
   if (APP.page === 'warehouse') switchWHTab('picklist', document.querySelectorAll('#wh-tabs .tab-btn')[3]);
-  else navigate(APP.page);
+  // Re-render the page we dispatched from, PRESERVING its tab token. On order_view the token
+  // carries the order id (e.g. "ORD123.delivery"); a bare navigate(APP.page) would drop it and
+  // land on the empty "no order" view. Fall back to the current hash tab if _navTab is unset.
+  else navigate(APP.page, { tab: APP._navTab || (typeof parseHash === 'function' ? parseHash().tab : null) });
 }
 
 // prefill (optional): a list/Set of SKUs to open prefilled to their FULL due qty —

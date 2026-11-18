@@ -833,8 +833,11 @@ tr.pk-flash>td{animation:pkFlash 1s ease-out}
 .pk-tile{background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:10px 12px;text-align:center}
 .pk-tile b{display:block;font-size:1.3rem;font-weight:800;color:var(--navy);font-variant-numeric:tabular-nums;line-height:1.1}
 .pk-tile span{display:block;font-size:.7rem;color:var(--text-muted);margin-top:3px;letter-spacing:.01em}
-/* Pick modal header counter — live units-picked + completed-lines, under the order id. */
-.pk-hd{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 12px}
+/* Pick modal header counter — live units-picked + completed-lines, sticky just under the
+   modal title (bleeds over the .modal-body 22px padding so it spans edge to edge and the
+   pick list scrolls underneath it). */
+.pk-hd{display:flex;align-items:center;gap:8px;flex-wrap:wrap;position:sticky;top:0;z-index:6;
+  margin:-22px -22px 12px;padding:12px 22px;background:var(--surface);border-bottom:1px solid var(--border)}
 .pk-hd-chip{display:inline-flex;align-items:center;gap:6px;font-size:.82rem;font-weight:700;padding:5px 11px;border-radius:999px;border:1px solid var(--border);background:var(--surface);white-space:nowrap;font-variant-numeric:tabular-nums}
 .pk-hd-chip .ic{font-size:.95rem;line-height:1}
 .pk-hd-chip .sub{font-weight:600;color:var(--text-muted)}

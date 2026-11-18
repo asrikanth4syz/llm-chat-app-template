@@ -1233,7 +1233,17 @@ async function renderOrderFull(el) {
   const id = parts[0] || '';
   let tab = parts[1] || 'overview';
   const view0 = parts[2] || '';
-  if (!id) { el.innerHTML = notImplemented('order_view'); return; }
+  if (!id) {
+    // Reached without an order in context (e.g. a stale link). Show a real empty state,
+    // not the "Coming Soon" placeholder, with a way back to the queue.
+    el.innerHTML = `<div class="card" style="padding:40px;text-align:center">
+      <div style="font-size:2.4rem">📋</div>
+      <div style="font-weight:800;color:var(--navy);margin-top:8px">No order selected</div>
+      <div style="color:var(--text-muted);font-size:.86rem;margin-top:4px">Open an order from the queue to see its full view.</div>
+      <button class="btn btn-secondary" style="margin-top:16px" ${dataAct('ofBackToOrders')}>← Back to Orders</button>
+    </div>`;
+    return;
+  }
   el.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading ${h(id)}…</p></div>`;
   const [order, comments, dcRes, drill] = await Promise.all([
     api('/orders/' + id),
