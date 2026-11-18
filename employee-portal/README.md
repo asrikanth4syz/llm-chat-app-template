@@ -183,6 +183,8 @@ tooltips on the key section headers. Open the Worker URL in a browser:
 | POST | `/api/admin/lifecycle/resignations/:id/withdraw-decide` | employee.manage | `{decision}` — approve/reject a post-HR withdrawal request |
 | GET | `/api/lifecycle/clearance` | Finance/IT (own dept) / HR (all) | clearance tasks only; no reason/approval remarks |
 | POST | `/api/admin/lifecycle/clearance/:taskId` | dept owner / HR | `{status,remarks,completionDate?,dueDate?}` — recomputes overall clearance |
+| GET | `/api/lifecycle/date-policy` | any login | active resignation-date mode (toggle, max-future-days, min/max/default) — the picker reads this |
+| POST | `/api/admin/lifecycle/date-policy` | super_admin / hr_admin | set the mode `{allowFuture,maxFutureDays,reason*}` — audited (prev→new + reason) |
 | GET | `/api/admin/lifecycle/legacy-dates` | employee.manage / audit.read | **read-only** list of resignations dated today/future (for review; never modified) |
 | GET | `/api/admin/lifecycle/reminders` | employee.manage | reminder feed (last 14 days) produced by the daily cron |
 | POST | `/api/admin/lifecycle/run-reminders` | employee.manage | run the reminder job on demand (same body as the cron) |
@@ -517,9 +519,13 @@ intervals, clearance departments, clearance auto-days) — nothing is hardcoded.
   escalation after `resign_escalate_days` (5), and LWD reminders at `resign_lwd_reminders`
   (15/7/3/1). HR sees them on the Lifecycle **Reminders** card (with a **Run now** button) and an
   action-centre count. Delivery is in-app (no email/push channel is configured yet).
-- **Date rule is locked** in `docs/resignation-date-rule.md` (default yesterday; yesterday-or-earlier
-  only; today/future blocked; IST, date-only; enforced at UI + submit + server). **Notice default is
-  60** calendar days — migration `0025` bumped the old seeded 30 to 60 and new employees default to 60.
+- **Date rule is an admin setting** (migration `0026`, spec in `docs/resignation-date-rule.md`): a
+  **toggle** `resign_allow_future` (default OFF = yesterday-or-earlier; ON = today … today+N) and
+  `resign_max_future_days` (default 90), set on the Lifecycle **Resignation date policy** card
+  (super_admin / HR Admin) with a mandatory reason and full audit. Both the picker and the server
+  read the same `portal_config` values (no hardcoding); IST, date-only; enforced at UI + submit +
+  server; the active mode is recorded per resignation (`date_mode`). **Notice default is 60** calendar
+  days — migration `0025` bumped the old seeded 30 to 60 and new employees default to 60.
 - **Full & Final — estimate, review-only.** `GET …/fnf` runs the pure engine over the
   employee's current salary, tenure and leave balance to produce a settlement **estimate**:
   earned salary to LWD (pro-rated on the payroll divisor), **leave encashment** (configured

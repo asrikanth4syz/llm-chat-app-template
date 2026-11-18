@@ -1544,11 +1544,33 @@ async function handlePayrollBank(actor: Actor, env: Env, runId: string): Promise
 // State machine lives in src/resignation.ts (pure). Here we resolve DB context, apply the
 // transition, persist milestone columns, write an immutable event, and sync employment_status.
 
-// IST "today" — org time zone for all resignation date logic (UTC+05:30).
+// IST "today" / "yesterday" — org time zone for all resignation date logic (UTC+05:30).
 function istTodayISO(): string { return new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10); }
+function istYesterdayISO(): string { return new Date(Date.now() + 5.5 * 3600 * 1000 - 86400000).toISOString().slice(0, 10); }
 async function cfg(env: Env, key: string, def: string): Promise<string> {
   const r = await env.DB.prepare("SELECT value FROM portal_config WHERE key = ?").bind(key).first<{ value: string }>();
   return (r?.value ?? def);
+}
+// The single source of truth for the resignation-date rule (admin toggle in portal_config).
+// Returns everything the UI and the server need so neither hardcodes the rule.
+interface ResignDateMode { allowFuture: boolean; maxFutureDays: number; mode: "past_only" | "future_allowed"; today: string; min: string | null; max: string; default: string; }
+async function resignDateMode(env: Env): Promise<ResignDateMode> {
+  const allowFuture = (await cfg(env, "resign_allow_future", "0")) === "1";
+  let maxFutureDays = Math.round(Number(await cfg(env, "resign_max_future_days", "90")));
+  if (!(maxFutureDays >= 1 && maxFutureDays <= 365)) maxFutureDays = 90;
+  const today = istTodayISO();
+  if (allowFuture) return { allowFuture, maxFutureDays, mode: "future_allowed", today, min: today, max: addDaysISO(today, maxFutureDays), default: today };
+  return { allowFuture, maxFutureDays, mode: "past_only", today, min: null, max: istYesterdayISO(), default: istYesterdayISO() };
+}
+// Validate a date-only resignation date against the active mode. Returns an error key+message, or null.
+function validateResignDate(date: string, m: ResignDateMode): { key: string; message: string } | null {
+  if (m.allowFuture) {
+    if (date < m.today) return { key: "notBeforeToday", message: "Resignation date cannot be earlier than today." };
+    if (date > m.max) return { key: "maxFuture", message: `Resignation date cannot be more than ${m.maxFutureDays} days from today.` };
+    return null;
+  }
+  if (date >= m.today) return { key: "yestOrEarlier", message: "Resignation date must be yesterday or an earlier date." };
+  return null;
 }
 async function recordREvent(env: Env, rid: string, empId: string, prev: string | null, next: string | null, action: string, userId: string, remarks: string | null): Promise<void> {
   try {
@@ -1605,12 +1627,12 @@ async function handleResignSubmit(actor: Actor, env: Env, request: Request): Pro
   if (!emp) return json({ error: "employee not found" }, 404);
   const reasonCode = _s(b.reasonCode);
   if (!reasonCode) return json({ error: "resignation reason is required" }, 400);
-  // IST, date-only. Default = yesterday; allowed = yesterday or earlier; today/future blocked.
-  const today = istTodayISO();
-  const yesterday = new Date(Date.now() + 5.5 * 3600 * 1000 - 86400000).toISOString().slice(0, 10);
-  const resignationDate = _s(b.resignationDate) || yesterday;
+  // Date rule is admin-configurable (portal_config), resolved + enforced server-side (IST, date-only).
+  const dm = await resignDateMode(env);
+  const resignationDate = _s(b.resignationDate) || dm.default;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(resignationDate)) return json({ error: "valid resignation date (YYYY-MM-DD) required" }, 400);
-  if (resignationDate >= today) return json({ error: "Resignation date must be yesterday or an earlier date." }, 400);
+  const dateErr = validateResignDate(resignationDate, dm);
+  if (dateErr) return json({ error: dateErr.message }, 400);
   const active = await env.DB.prepare("SELECT id FROM resignations WHERE employee_id = ? AND status NOT IN ('rejected','withdrawn','relieved')").bind(empId).first();
   if (active) return json({ error: "an open resignation already exists for this employee" }, 409);
   const defNotice = Number(await cfg(env, "resign_notice_default_days", "60")) || 60;
@@ -1620,8 +1642,8 @@ async function handleResignSubmit(actor: Actor, env: Env, request: Request): Pro
   const status: RState = emp.manager_id ? "pending_manager" : "pending_hr";
   const id = "rsg_" + uid().replace(/-/g, "").slice(0, 12);
   await env.DB.prepare(
-    "INSERT INTO resignations (id, employee_id, submitted_by, resignation_date, reason_code, reason, notice_days, requested_lwd, status) VALUES (?,?,?,?,?,?,?,?,?)"
-  ).bind(id, empId, actor.userId, resignationDate, reasonCode, _s(b.reason), noticeDays, expectedLwd, status).run();
+    "INSERT INTO resignations (id, employee_id, submitted_by, resignation_date, reason_code, reason, notice_days, requested_lwd, status, date_mode) VALUES (?,?,?,?,?,?,?,?,?,?)"
+  ).bind(id, empId, actor.userId, resignationDate, reasonCode, _s(b.reason), noticeDays, expectedLwd, status, dm.mode).run();
   await recordREvent(env, id, empId, null, "submitted", "submit", actor.userId, _s(b.reason));
   await recordREvent(env, id, empId, "submitted", status, "route", actor.userId, emp.manager_id ? "routed to manager" : "no manager — routed to HR");
   await audit(env, actor.userId, "RESIGNATION_SUBMIT", "employee", empId, `tendered ${resignationDate}, expected LWD ${expectedLwd}`);
@@ -2046,6 +2068,28 @@ async function handleRunReminders(actor: Actor, env: Env): Promise<Response> {
   const n = await runResignationReminders(env);
   await audit(env, actor.userId, "RESIGNATION_REMINDERS_RUN", "payroll", null, `${n} reminders`);
   return json({ ok: true, generated: n });
+}
+
+// Resignation-date policy: read by any login (the picker needs it); changed by admins only
+// (super_admin or HR Admin), with a mandatory reason and a full audit of the change.
+async function handleResignConfigGet(_actor: Actor, env: Env): Promise<Response> {
+  const m = await resignDateMode(env);
+  return json({ allowFuture: m.allowFuture, maxFutureDays: m.maxFutureDays, mode: m.mode, min: m.min, max: m.max, default: m.default, today: m.today });
+}
+async function handleResignConfigSet(actor: Actor, env: Env, request: Request): Promise<Response> {
+  if (actor.role !== "super_admin" && actor.role !== "hr_admin") return json({ error: "forbidden (admin only)" }, 403);
+  const b = await request.json().catch(() => ({})) as { allowFuture?: unknown; maxFutureDays?: unknown; reason?: string };
+  if (!_s(b.reason)) return json({ error: "a reason is required to change this setting" }, 400);
+  const prev = await resignDateMode(env);
+  const allowFuture = b.allowFuture === true || b.allowFuture === "1" || b.allowFuture === 1;
+  let maxFutureDays = Math.round(Number(b.maxFutureDays));
+  if (!(maxFutureDays >= 1 && maxFutureDays <= 365)) maxFutureDays = prev.maxFutureDays;
+  await env.DB.batch([
+    env.DB.prepare("INSERT INTO portal_config (key, value) VALUES ('resign_allow_future', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(allowFuture ? "1" : "0"),
+    env.DB.prepare("INSERT INTO portal_config (key, value) VALUES ('resign_max_future_days', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(String(maxFutureDays)),
+  ]);
+  await audit(env, actor.userId, "CONFIG_RESIGN_DATE", "config", "resign_date_mode", `allowFuture ${prev.allowFuture}→${allowFuture}, maxFutureDays ${prev.maxFutureDays}→${maxFutureDays} · ${_s(b.reason)}`);
+  return json({ ok: true, allowFuture, maxFutureDays });
 }
 
 // ---- FR-04 Approvals (unified inbox + delegation) ------------------------------
@@ -2588,6 +2632,8 @@ export default {
       if (rwdd && method === "POST") return await handleWithdrawDecide(actor, env, decodeURIComponent(rwdd[1]), request);
       const rctu = path.match(/^\/api\/admin\/lifecycle\/clearance\/([^/]+)$/);
       if (rctu && method === "POST") return await handleClearanceUpdate(actor, env, decodeURIComponent(rctu[1]), request);
+      if (path === "/api/lifecycle/date-policy" && method === "GET") return await handleResignConfigGet(actor, env);
+      if (path === "/api/admin/lifecycle/date-policy" && method === "POST") return await handleResignConfigSet(actor, env, request);
       if (path === "/api/admin/lifecycle/legacy-dates" && method === "GET") return await handleLegacyDates(actor, env);
       if (path === "/api/admin/lifecycle/reminders" && method === "GET") return await handleRemindersList(actor, env);
       if (path === "/api/admin/lifecycle/run-reminders" && method === "POST") return await handleRunReminders(actor, env);

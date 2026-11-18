@@ -444,6 +444,11 @@ Object.assign(DICT.en, {
   reminders: "Reminders", reminders_help: "Approval and last-working-day reminders generated daily by the scheduled job. Run on demand with the button.", runRemindersNow: "Run now", remindersGenerated: "{n} reminder(s) generated.", noReminders: "No reminders in the last 14 days.",
   dataCheck: "Data check", legacyNote: "{n} resignation(s) with a today/future date (listed for review, not modified):",
   rem_manager_approval: "Manager approval", rem_hr_approval: "HR approval", rem_escalation: "Escalation", rem_lwd: "Last working day", notif_reminders: "Resignation reminders",
+  datePolicy: "Resignation date policy", datePolicy_help: "Admin-only. Controls whether employees pick a past or a future resignation date. Changes are audited and apply to new submissions.",
+  allowFutureLbl: "Allow today/future resignation date", allowFutureHelp: "Off: employees pick yesterday or earlier. On: employees pick today or later.",
+  maxFutureLbl: "Maximum future days (1–365)", saveSetting: "Save setting", currentMode: "Current", modePast: "Off — yesterday or earlier", modeFuture: "On — today up to +{n} days",
+  dateHelpPast: "Pick yesterday or an earlier date.", dateHelpFuture: "Pick today up to {n} days from today.",
+  notBeforeToday: "Resignation date cannot be earlier than today.", maxFutureMsg: "Resignation date cannot be more than {n} days from today.",
 });
 Object.assign(DICT.kn, {
   rstat_pending_manager: "ಮೇಲಧಿಕಾರಿ ಬಾಕಿ", rstat_pending_hr: "HR ಬಾಕಿ", rstat_notice_period: "ನೋಟಿಸ್ ಅವಧಿ",
@@ -467,6 +472,11 @@ Object.assign(DICT.kn, {
   reminders: "ಜ್ಞಾಪನೆಗಳು", reminders_help: "ಅನುಮೋದನೆ ಮತ್ತು ಕೊನೆಯ ಕೆಲಸದ ದಿನದ ಜ್ಞಾಪನೆಗಳು ಪ್ರತಿದಿನ ನಿಗದಿತ ಕಾರ್ಯದಿಂದ ರಚಿಸಲಾಗುತ್ತದೆ. ಬಟನ್‌ನಿಂದ ಈಗಲೇ ಚಲಾಯಿಸಿ.", runRemindersNow: "ಈಗ ಚಲಾಯಿಸಿ", remindersGenerated: "{n} ಜ್ಞಾಪನೆ(ಗಳು) ರಚಿಸಲಾಗಿದೆ.", noReminders: "ಕಳೆದ 14 ದಿನಗಳಲ್ಲಿ ಜ್ಞಾಪನೆಗಳಿಲ್ಲ.",
   dataCheck: "ಡೇಟಾ ಪರಿಶೀಲನೆ", legacyNote: "ಇಂದು/ಭವಿಷ್ಯದ ದಿನಾಂಕದ {n} ರಾಜೀನಾಮೆ(ಗಳು) (ಪರಿಶೀಲನೆಗಾಗಿ ಪಟ್ಟಿ, ಬದಲಾಯಿಸಿಲ್ಲ):",
   rem_manager_approval: "ಮೇಲಧಿಕಾರಿ ಅನುಮೋದನೆ", rem_hr_approval: "HR ಅನುಮೋದನೆ", rem_escalation: "ಉಲ್ಬಣ", rem_lwd: "ಕೊನೆಯ ಕೆಲಸದ ದಿನ", notif_reminders: "ರಾಜೀನಾಮೆ ಜ್ಞಾಪನೆಗಳು",
+  datePolicy: "ರಾಜೀನಾಮೆ ದಿನಾಂಕ ನೀತಿ", datePolicy_help: "ಆಡಳಿತ ಮಾತ್ರ. ಉದ್ಯೋಗಿಗಳು ಹಿಂದಿನ ಅಥವಾ ಭವಿಷ್ಯದ ದಿನಾಂಕ ಆರಿಸಬಹುದೇ ಎಂದು ನಿಯಂತ್ರಿಸುತ್ತದೆ. ಬದಲಾವಣೆಗಳು ಲೆಕ್ಕಪರಿಶೋಧಿಸಲ್ಪಡುತ್ತವೆ.",
+  allowFutureLbl: "ಇಂದು/ಭವಿಷ್ಯದ ರಾಜೀನಾಮೆ ದಿನಾಂಕ ಅನುಮತಿಸಿ", allowFutureHelp: "ಆಫ್: ಉದ್ಯೋಗಿಗಳು ನಿನ್ನೆ ಅಥವಾ ಹಿಂದಿನದು ಆರಿಸುತ್ತಾರೆ. ಆನ್: ಇಂದು ಅಥವಾ ನಂತರ.",
+  maxFutureLbl: "ಗರಿಷ್ಠ ಭವಿಷ್ಯದ ದಿನಗಳು (1–365)", saveSetting: "ಸೆಟ್ಟಿಂಗ್ ಉಳಿಸಿ", currentMode: "ಪ್ರಸ್ತುತ", modePast: "ಆಫ್ — ನಿನ್ನೆ ಅಥವಾ ಹಿಂದಿನದು", modeFuture: "ಆನ್ — ಇಂದಿನಿಂದ +{n} ದಿನಗಳವರೆಗೆ",
+  dateHelpPast: "ನಿನ್ನೆ ಅಥವಾ ಅದಕ್ಕಿಂತ ಹಿಂದಿನ ದಿನಾಂಕ ಆರಿಸಿ.", dateHelpFuture: "ಇಂದಿನಿಂದ {n} ದಿನಗಳವರೆಗೆ ಆರಿಸಿ.",
+  notBeforeToday: "ರಾಜೀನಾಮೆ ದಿನಾಂಕ ಇಂದಿಗಿಂತ ಹಿಂದಿನದಾಗಿರಬಾರದು.", maxFutureMsg: "ರಾಜೀನಾಮೆ ದಿನಾಂಕ ಇಂದಿನಿಂದ {n} ದಿನಗಳಿಗಿಂತ ಹೆಚ್ಚು ಆಗಿರಬಾರದು.",
 });
 Object.assign(DICT.hi, {
   rstat_pending_manager: "प्रबंधक लंबित", rstat_pending_hr: "HR लंबित", rstat_notice_period: "नोटिस अवधि",
@@ -490,6 +500,11 @@ Object.assign(DICT.hi, {
   reminders: "अनुस्मारक", reminders_help: "अनुमोदन और अंतिम कार्यदिवस अनुस्मारक प्रतिदिन शेड्यूल्ड जॉब द्वारा बनाए जाते हैं। बटन से तुरंत चलाएँ।", runRemindersNow: "अभी चलाएँ", remindersGenerated: "{n} अनुस्मारक बनाए गए।", noReminders: "पिछले 14 दिनों में कोई अनुस्मारक नहीं।",
   dataCheck: "डेटा जाँच", legacyNote: "आज/भविष्य की तिथि वाले {n} इस्तीफ़े (समीक्षा हेतु सूचीबद्ध, बदले नहीं गए):",
   rem_manager_approval: "प्रबंधक अनुमोदन", rem_hr_approval: "HR अनुमोदन", rem_escalation: "एस्केलेशन", rem_lwd: "अंतिम कार्यदिवस", notif_reminders: "इस्तीफ़ा अनुस्मारक",
+  datePolicy: "इस्तीफ़ा तिथि नीति", datePolicy_help: "केवल एडमिन। तय करता है कि कर्मचारी पिछली या भविष्य की तिथि चुनें। बदलाव ऑडिट होते हैं और नई प्रविष्टियों पर लागू होते हैं।",
+  allowFutureLbl: "आज/भविष्य की इस्तीफ़ा तिथि अनुमति दें", allowFutureHelp: "बंद: कर्मचारी कल या उससे पहले चुनते हैं। चालू: आज या बाद में।",
+  maxFutureLbl: "अधिकतम भविष्य दिन (1–365)", saveSetting: "सेटिंग सहेजें", currentMode: "वर्तमान", modePast: "बंद — कल या उससे पहले", modeFuture: "चालू — आज से +{n} दिन तक",
+  dateHelpPast: "कल या उससे पहले की तिथि चुनें।", dateHelpFuture: "आज से {n} दिन तक चुनें।",
+  notBeforeToday: "इस्तीफ़ा तिथि आज से पहले की नहीं हो सकती।", maxFutureMsg: "इस्तीफ़ा तिथि आज से {n} दिन से अधिक नहीं हो सकती।",
 });
 
 // FR-04 Approvals + inline-help strings.
@@ -2773,11 +2788,37 @@ async function loadLifecycleView() {
   if (isClearanceOwner() && !canManageEmployees()) { body.appendChild(el("div", { class: "card", id: "lc_clearance" }, [el("div", { class: "muted", text: "…" })])); loadClearanceOwnerCard(); }
   if (canManageEmployees()) { body.appendChild(el("div", { class: "card", id: "lc_clearance" }, [el("div", { class: "muted", text: "…" })])); loadClearanceOwnerCard(); }
   if (canManageEmployees()) { body.appendChild(el("div", { class: "card", id: "lc_reminders" }, [el("div", { class: "muted", text: "…" })])); loadRemindersCard(); }
+  if (canEditDatePolicy()) { body.appendChild(el("div", { class: "card", id: "lc_datepolicy" }, [el("div", { class: "muted", text: "…" })])); loadDatePolicyCard(); }
   body.appendChild(el("div", { class: "card", id: "lc_filters" }));
   body.appendChild(el("div", { class: "card", id: "lc_list" }, [el("div", { class: "muted", text: "…" })]));
   body.appendChild(el("div", { id: "lc_detail" }));
   if (canManageEmployees()) renderLcFilters();
   loadResignList();
+}
+function canEditDatePolicy() { return state.role === "super_admin" || state.role === "hr_admin"; }
+async function loadDatePolicyCard() {
+  const c = document.getElementById("lc_datepolicy"); if (!c) return;
+  try {
+    const p = await api("/api/lifecycle/date-policy");
+    clear(c); c.appendChild(h2help(t("datePolicy"), t("datePolicy_help")));
+    const toggle = el("input", { type: "checkbox", ...(p.allowFuture ? { checked: "" } : {}) });
+    const maxDays = el("input", { type: "number", min: "1", max: "365", value: String(p.maxFutureDays), style: "max-width:100px" });
+    const reason = el("input", { placeholder: t("reasonRequired") });
+    const fr = (l, f) => el("div", {}, [el("label", { text: l }), f]);
+    c.appendChild(el("label", { class: "row", style: "display:flex;gap:8px;align-items:center;cursor:pointer" }, [toggle, el("span", { text: t("allowFutureLbl") })]));
+    c.appendChild(el("div", { class: "muted", style: "font-size:12px;margin:2px 0 8px", text: t("allowFutureHelp") }));
+    c.appendChild(fr(t("maxFutureLbl"), maxDays));
+    c.appendChild(fr(t("reasonRequired"), reason));
+    const save = el("button", { class: "primary sm", style: "margin-top:8px", text: t("saveSetting") });
+    save.addEventListener("click", async () => {
+      if (!reason.value.trim()) { flash("err", t("reasonRequired")); return; }
+      save.disabled = true;
+      try { await api("/api/admin/lifecycle/date-policy", { method: "POST", body: { allowFuture: toggle.checked, maxFutureDays: Number(maxDays.value), reason: reason.value } }); flash("ok", t("saved")); loadDatePolicyCard(); }
+      catch (ex) { flash("err", ex.message); save.disabled = false; }
+    });
+    c.appendChild(el("div", { class: "actions", style: "margin-top:4px" }, [save]));
+    c.appendChild(el("div", { class: "muted", style: "font-size:11px;margin-top:6px", text: `${t("currentMode")}: ${p.allowFuture ? t("modeFuture").replace("{n}", p.maxFutureDays) : t("modePast")}` }));
+  } catch (ex) { clear(c); c.appendChild(el("div", { class: "msg err", text: ex.message })); }
 }
 async function loadRemindersCard() {
   const c = document.getElementById("lc_reminders"); if (!c) return;
@@ -3025,10 +3066,12 @@ async function loadResignCard() {
       card.appendChild(hist);
       return;
     }
-    // tender form — resignation date defaults to yesterday; today & future are blocked (IST).
-    const today = istToday();
-    const yesterday = new Date(Date.now() + 5.5 * 3600 * 1000 - 86400000).toISOString().slice(0, 10);
-    const date = el("input", { type: "date", value: yesterday, max: yesterday });
+    // tender form — picker min/max/default and validation come from the admin date policy (one source).
+    const pol = await api("/api/lifecycle/date-policy"); // {allowFuture, maxFutureDays, min, max, default, today}
+    const dateAttrs = { type: "date", value: pol.default, max: pol.max };
+    if (pol.min) dateAttrs.min = pol.min; // out-of-range dates are disabled/greyed by the native picker
+    const date = el("input", dateAttrs);
+    const dateHelp = el("div", { class: "muted", style: "font-size:11px;margin-top:2px", text: pol.allowFuture ? t("dateHelpFuture").replace("{n}", pol.maxFutureDays) : t("dateHelpPast") });
     const reasonSel = el("select", {});
     reasonSel.appendChild(el("option", { value: "", text: "—" }));
     for (const rc of RESIGN_REASONS) reasonSel.appendChild(el("option", { value: rc, text: t("rreason_" + rc) }));
@@ -3040,7 +3083,12 @@ async function loadResignCard() {
     const submit = el("button", { class: "primary sm", text: t("tenderResign") });
     submit.addEventListener("click", async () => {
       if (!reasonSel.value) { flash("err", t("reasonRequired")); return; }
-      if (!date.value || date.value >= today) { flash("err", t("dateYestOrEarlier")); return; }
+      // Re-validate at submit against the active mode (handles a form left open across a setting change).
+      if (!date.value) { flash("err", pol.allowFuture ? t("notBeforeToday") : t("dateYestOrEarlier")); return; }
+      if (pol.allowFuture) {
+        if (date.value < pol.today) { flash("err", t("notBeforeToday")); return; }
+        if (date.value > pol.max) { flash("err", t("maxFutureMsg").replace("{n}", pol.maxFutureDays)); return; }
+      } else if (date.value >= pol.today) { flash("err", t("dateYestOrEarlier")); return; }
       if (!confirm(t("tenderConfirm"))) return;
       submit.disabled = true;
       try { await api("/api/lifecycle/resign", { method: "POST", body: { resignationDate: date.value, reasonCode: reasonSel.value, reason: remarks.value } }); flash("ok", t("resignSubmitted")); loadResignCard(); }
@@ -3050,6 +3098,7 @@ async function loadResignCard() {
     card.appendChild(el("div", { class: "muted", style: "font-size:12px;margin-bottom:6px", text: t("noticeOnFile").replace("{n}", n) }));
     card.appendChild(fr(t("resignReasonLbl"), reasonSel));
     card.appendChild(fr(t("tenderDate"), date));
+    card.appendChild(dateHelp);
     card.appendChild(fr(t("remarksOptional"), remarks));
     card.appendChild(lwdPreview);
     card.appendChild(el("div", { class: "actions", style: "margin-top:8px" }, [submit]));

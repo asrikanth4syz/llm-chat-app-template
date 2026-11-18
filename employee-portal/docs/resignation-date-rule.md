@@ -1,38 +1,50 @@
-# Resignation date rule — LOCKED
+# Resignation date rule — admin-configurable (single source of truth)
 
-**Status:** Final (2026-11-17). This rule has flip-flopped during development; treat this file as
-the single source of truth. Do not change the direction without updating this note and the three
-enforcement layers below together.
+**Status:** Final design (2026-11-18). The rule is no longer hardcoded in one direction — it is an
+**admin setting** read at runtime by both the UI and the backend from `portal_config`. Do not
+hardcode either direction anywhere; change behaviour by changing the setting, not the code.
 
-## The rule
-- **Default:** yesterday (IST).
-- **Allowed:** yesterday or any earlier date.
-- **Blocked:** today and any future date.
-- **Message (verbatim):** `Resignation date must be yesterday or an earlier date.`
+## The setting (Admin only — super_admin / HR Admin)
+Configured on the **Lifecycle → Resignation date policy** card; stored in `portal_config`:
 
-## Why
-A resignation records a date that has already occurred (the day it was tendered/effective); it is
-never post-dated into the future, and "today" is excluded so the submission day itself cannot be
-backfilled as the resignation date.
+| Key | Meaning | Default |
+|---|---|---|
+| `resign_allow_future` | `0` = OFF, `1` = ON | `0` (OFF) |
+| `resign_max_future_days` | upper bound in days when ON (1–365) | `90` |
+
+Every change requires a **mandatory reason** and is audited (`CONFIG_RESIGN_DATE`: previous → new
+values, admin user, timestamp, reason).
+
+## Behaviour by mode
+| | OFF (default) | ON |
+|---|---|---|
+| Default date | Yesterday | Today |
+| Allowed | Yesterday or earlier | Today … today + `max_future_days` |
+| Blocked | Today and future | Before today; beyond the maximum |
+| Picker | `max = yesterday` (later dates disabled) | `min = today`, `max = today+N` (earlier/beyond disabled) |
+| Message | `Resignation date must be yesterday or an earlier date.` | `Resignation date cannot be earlier than today.` / `Resignation date cannot be more than {N} days from today.` |
 
 ## Time zone & type
-- "Today"/"yesterday" are computed **on the server in Asia/Kolkata (IST, UTC+05:30)**, never from
-  the device clock.
-- Resignation date is a **date-only** value (`YYYY-MM-DD`); no time component, to avoid UTC/IST
-  off-by-one errors.
-- The **submission timestamp** is a separate, system-generated, read-only field (`created_at`).
+- "Today"/"yesterday" are computed **on the server in Asia/Kolkata (IST)**, never from the device
+  clock. Date is **date-only** (`YYYY-MM-DD`).
+- **Submission timestamp** is a separate, system-generated, read-only field (`created_at`).
+- The mode active at submission is stored on the record (`resignations.date_mode`).
 
-## Enforcement (all three layers — keep in sync)
-1. **UI** (`public/app.js`, `loadResignCard` tender form): date input `value = yesterday`,
-   `max = yesterday`.
-2. **Submit-time** (same handler): re-check `date >= today` before calling the API; show the
-   localized message (`dateYestOrEarlier`).
-3. **Server** (`src/index.ts`, `handleResignSubmit`): compute IST `today`; reject when
-   `resignationDate >= today` with the verbatim message. This is authoritative and independent of
-   the picker (covers edited payloads, direct API calls, imports).
+## Enforcement (all three layers read the same setting)
+1. **UI** (`public/app.js`, `loadResignCard`): picker `min`/`max`/`default` and the client
+   re-check come from `GET /api/lifecycle/date-policy`.
+2. **Submit-time:** the form re-validates against the policy on submit (covers a form left open
+   across a setting change — the employee is asked to pick a new date; nothing is changed silently).
+3. **Server** (`src/index.ts`, `handleResignSubmit` → `resignDateMode` + `validateResignDate`):
+   authoritative, independent of the picker (covers edited payloads, API calls, imports).
+
+## When the setting changes
+- Applies to **new submissions** and to **drafts at submit time** (re-validated under the current
+  mode). **Submitted resignations are never modified or re-validated.**
+- Existing records that conflict are **listed for review, never altered**:
+  `GET /api/admin/lifecycle/legacy-dates` (read-only).
 
 ## Related
-- Default **notice period = 60** calendar days (config `resign_notice_default_days`); Expected LWD
-  = resignation date + notice, recalculated when the date changes.
-- Existing records are never auto-modified. Use `GET /api/admin/lifecycle/legacy-dates` (read-only)
-  to list any resignations whose date is today/future for manual review.
+- Notice period default **60** calendar days (`resign_notice_default_days`); Expected LWD =
+  resignation date + notice, recalculated when the date changes.
+- Not yet implemented: per-legal-entity / per-location override (global toggle only).
