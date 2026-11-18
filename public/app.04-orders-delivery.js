@@ -1807,12 +1807,14 @@ async function openOrderDrawer(id, triggerEl) {
     <div style="margin-top:14px">${ofStepperHtml(order)}</div>
     <div style="display:flex;gap:8px;margin-top:18px;flex-wrap:wrap">
       <button class="btn btn-primary" ${dataAct('ofDrawerOpenFull', id)}>Open full order →</button>
+      ${order.status === 'DRAFT' ? `<button class="btn btn-gold" ${dataAct('ofDrawerEditDraft', id)}>✏️ Edit draft</button>` : ''}
       ${naBtn}
     </div>
   </div>`;
   const x = document.getElementById('od-x'); if (x) x.focus();
 }
 function ofDrawerOpenFull(id) { closeOrderDrawer(); openOrderFull(id); }
+function ofDrawerEditDraft(id) { closeOrderDrawer(); editDraftOrder(id); }
 
 /* ============================================================
    CLIENT ORDER DETAIL (#client_order/<id>)
@@ -3902,6 +3904,11 @@ function orderQueueActions(o) {
   }
   const btns = [`<button class="btn btn-secondary btn-sm" ${dataActEl('openOrderDrawer', o.id)}>View</button>`];
   switch (o.status) {
+    case 'DRAFT':
+      btns.push(`<button class="btn btn-gold btn-sm" ${dataAct('editDraftOrder', o.id)}>✏️ Edit</button>`);
+      btns.push(`<button class="btn btn-secondary btn-sm" ${dataAct('submitDraftOrder', o.id)}>Submit</button>`);
+      btns.push(`<button class="btn btn-danger btn-sm" ${dataAct('cancelOrder', o.id)}>✕ Cancel</button>`);
+      break;
     case 'SUBMITTED':
       btns.push(`<button class="btn btn-success btn-sm" ${dataAct('approveOrderWithIndex', o.id)}>✓ Approve</button>`);
       btns.push(`<button class="btn btn-danger btn-sm" ${dataAct('opsRejectOrder', o.id)}>✕ Reject</button>`);
