@@ -28,7 +28,9 @@
 		//   full reconcile + Zoho Delivery Challans finance-register refresh.
 		// "30 2 * * *": 02:30 UTC = 08:00 IST — Phase 3 AR reminder pass (SEND_CRON;
 		//   must stay byte-identical to the SEND_CRON constant in src/index.ts).
-		"crons": ["30 17 * * *", "30 3 * * *", "30 2 * * *"]
+		// "0 4 * * *": 04:00 UTC = 09:30 IST — nightly recurring-order generation
+		//   (RECURRING_CRON; must stay byte-identical to the constant in src/index.ts).
+		"crons": ["30 17 * * *", "30 3 * * *", "30 2 * * *", "0 4 * * *"]
 	},
 	"upload_source_maps": true,
 	"d1_databases": [

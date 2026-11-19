@@ -173,6 +173,7 @@ const NAV = {
     // ACTION_PAGES so existing deep links / shortcuts keep working.
     { id:'orders',              label:'Orders',       icon:iconOrders,  badge:'!' },
     { id:'smart_paste',         label:'Smart Paste',  icon:iconCart,    badge:null },
+    { id:'recurring',           label:'Recurring Orders', icon:iconClock, badge:null },
     { section:'Fulfilment & Delivery' },
     { id:'fulfilment',          label:'Pick & Pack',      icon:iconFulfil,   badge:'!' },
     { id:'delivery',            label:'Deliveries',       icon:iconDelivery, badge:null },
@@ -224,6 +225,7 @@ const NAV = {
     // Phase 2: Pipeline + Due Items fold into the Orders hub (addressable tabs).
     { id:'orders',              label:'Orders',           icon:iconOrders,    badge:'!' },
     { id:'smart_paste',         label:'Smart Paste',      icon:iconCart,      badge:null },
+    { id:'recurring',           label:'Recurring Orders', icon:iconClock,     badge:null },
     { section:'Fulfilment & Delivery' },
     { id:'fulfilment',          label:'Pick & Pack',      icon:iconFulfil,    badge:'!' },
     { id:'delivery',            label:'Deliveries',       icon:iconDelivery,  badge:null },
@@ -299,6 +301,7 @@ const NAV = {
     { section:'Ordering' },
     { id:'catalog',        label:'Catalogue',      icon:iconLayers,   badge:null },
     { id:'place_order',    label:'Place Order',    icon:iconCart,      badge:null },
+    { id:'recurring',      label:'Recurring Orders', icon:iconClock,   badge:null },
     // Phase 2: "My Orders" is now a hub with a Track Delivery tab (#my_orders/tracking).
     { id:'my_orders',      label:'My Orders',      icon:iconOrders,    badge:null },
     { id:'approvals',      label:'Approvals',      icon:iconApprove,   badge:null },
@@ -320,6 +323,7 @@ const NAV = {
     { section:'Ordering' },
     { id:'catalog',       label:'Catalogue',      icon:iconLayers,   badge:null },
     { id:'place_order',   label:'Place Order',    icon:iconCart,     badge:null },
+    { id:'recurring',     label:'Recurring Orders', icon:iconClock,  badge:null },
     { id:'my_orders',     label:'All Orders',     icon:iconOrders,   badge:null },
     { section:'Billing' },
     { id:'my_statement',  label:'My Statement',   icon:iconBilling,  badge:null },
@@ -330,6 +334,7 @@ const NAV = {
     { section:'Ordering' },
     { id:'catalog',     label:'Catalogue',     icon:iconLayers,   badge:null },
     { id:'place_order', label:'Place Order',   icon:iconCart,      badge:null },
+    { id:'recurring',   label:'Recurring Orders', icon:iconClock,  badge:null },
     { id:'my_orders',   label:'My Orders',     icon:iconOrders,    badge:null },
     { section:'My Store' },
     { id:'my_inventory', label:'My Inventory', icon:iconInventory, badge:null },
@@ -874,6 +879,7 @@ const ACTION_PAGES = {
   catalog:     ['super_admin', 'ops_admin', 'client_admin', 'client_approver', 'client_user'],
   settings:    ['super_admin', 'ops_admin'],
   place_order: ['super_admin', 'ops_admin', 'procurement_manager'],
+  recurring:   ['super_admin', 'ops_admin', 'ops_manager', 'procurement_manager', 'client_admin', 'client_approver', 'client_user'],
   // Phase 2: Pipeline & Due Items are now tabs inside the "Orders" hub (page id
   // `orders`). They stay reachable off-nav so dashboard/report shortcuts and
   // #orders/pipeline · #orders/due deep links keep working for these roles.
@@ -1155,6 +1161,7 @@ function closeMobileSidebar() {
 const PAGE_MAP = {
   dashboard: 'renderDashboard',
   place_order: 'renderPlaceOrder',
+  recurring: 'renderRecurring',
   my_orders: 'renderMyOrdersHub',
   track_delivery: 'renderTrackDelivery',
   orders: 'renderOrdersHub',

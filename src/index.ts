@@ -15,6 +15,7 @@ import {
   type LegRowStatus,
 } from "./quote_approval";
 import type { ApprovalLeg } from "./quote_access";
+import { recurringOccurrences, istTodayISO, addDaysISO, type RecurrencePlan } from "./recurring";
 
 // ── JWT ──────────────────────────────────────────────────────────────
 async function signJWT(payload: object, secret: string): Promise<string> {
@@ -4006,6 +4007,9 @@ const SEND_CRON = "30 2 * * *";
 // Nightly Zoho Books delta sync. 23:00 IST = 17:30 UTC. Must stay byte-identical to the
 // matching wrangler.jsonc trigger — the scheduled() dispatch branches on this literal.
 const BOOKS_SYNC_CRON = "30 17 * * *";
+// Nightly recurring-order generation. 09:30 IST = 04:00 UTC. Must stay byte-identical
+// to the matching wrangler.jsonc trigger — scheduled() branches on this literal.
+const RECURRING_CRON = "0 4 * * *";
 // Batch bound for the daily reminder pass (continuation cursor across ticks).
 const MAX_CUSTOMERS_PER_RUN = 200;
 
@@ -6988,6 +6992,13 @@ export default {
         catch (e) { console.error("quote reminder pass cron error:", String(e)); }
         return;
       }
+      // Nightly recurring-order generation (09:30 IST). Materialises due plan
+      // occurrences into orders (DRAFT by default); nothing else runs on this tick.
+      if ((controller.cron || "") === RECURRING_CRON) {
+        try { const r = await runRecurringGeneration(env); console.log("recurring generation:", JSON.stringify(r)); }
+        catch (e) { console.error("recurring generation cron error:", String(e)); }
+        return;
+      }
       // Nightly Zoho Books delta (23:00 IST). Runs ONLY the finance-mirror refresh — no
       // delivery reminders or inventory pull on this tick — so it stays a focused, bounded job.
       if ((controller.cron || "") === BOOKS_SYNC_CRON) {
@@ -7203,6 +7214,16 @@ export default {
       if (path==="/api/standing-orders"                              && method==="GET")  return handleListStandingOrders(request,env);
       if (path.match(/^\/api\/standing-orders\/[^/]+\/skip$/)        && method==="POST") return handleSkipStandingOrder(request,env,path);
       if (path.match(/^\/api\/standing-orders\/[^/]+\/materialize$/) && method==="POST") return handleMaterializeStandingOrder(request,env,path);
+      // Recurring Orders (Plans → Occurrences → generated Orders). Exact routes
+      // first, then the sub-action routes, then the /:id wildcard GET/PATCH.
+      if (path==="/api/recurring-plans"       && method==="GET")  return handleListRecurringPlans(request,env);
+      if (path==="/api/recurring-plans"       && method==="POST") return handleCreateRecurringPlan(request,env);
+      if (path==="/api/recurring-occurrences" && method==="GET")  return handleListRecurringOccurrences(request,env);
+      if (path==="/api/recurring/run"         && method==="POST") return handleRunRecurring(request,env);
+      { const m = path.match(/^\/api\/recurring-plans\/([^/]+)\/skip$/);     if (m && method==="POST") return handleSkipRecurringOccurrence(request,env,m[1]); }
+      { const m = path.match(/^\/api\/recurring-plans\/([^/]+)\/generate$/); if (m && method==="POST") return handleGenerateRecurringOccurrence(request,env,m[1]); }
+      { const m = path.match(/^\/api\/recurring-plans\/([^/]+)$/);           if (m && method==="GET")   return handleGetRecurringPlan(request,env,m[1]); }
+      { const m = path.match(/^\/api\/recurring-plans\/([^/]+)$/);           if (m && method==="PATCH") return handlePatchRecurringPlan(request,env,m[1]); }
       if (path==="/api/delivery-challans"                            && method==="GET")  return handleListDCs(request,env);
       if (path.match(/^\/api\/delivery-challans\/[^/]+$/)           && method==="GET")  return handleGetDC(request,env,path);
       if (path.match(/^\/api\/delivery-challans\/[^/]+\/bill$/)     && method==="POST") return handleBillDC(request,env,path);
@@ -16705,6 +16726,411 @@ function nextCycleDate(dateStr: string, freq: string): string {
   else if (f.startsWith("QUART")) d.setUTCMonth(d.getUTCMonth()+3);
   else d.setUTCMonth(d.getUTCMonth()+1);
   return d.toISOString().slice(0,10);
+}
+
+// ════════════════════════════════════════════════════════════════════
+// RECURRING ORDERS (Plans → Occurrences → generated Orders)
+// Built on the standing_orders table (extended with rich schedule columns)
+// + the standing_order_events ledger. Occurrences are COMPUTED from the
+// schedule (src/recurring.ts) and overlaid with the ledger (SKIPPED /
+// CREATED). A nightly cron and a manual "generate now" materialise due
+// occurrences into real orders via the standard order path — DRAFT by
+// default (client/ops then edit + submit), or auto-submit when opted in.
+// ════════════════════════════════════════════════════════════════════
+
+const REC_ADMIN_ROLES = ["super_admin", "ops_admin", "ops_manager"];
+const REC_WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+// Add the rich recurring columns to standing_orders (idempotent self-heal).
+async function ensureRecurringSchema(env: Env): Promise<void> {
+  const cols: Array<[string, string]> = [
+    ["site", "TEXT"], ["product_sku", "TEXT"], ["product_name", "TEXT"],
+    ["qty", "REAL"], ["unit", "TEXT"], ["freq", "TEXT"], ["days_json", "TEXT"],
+    ["monthly_method", "TEXT"], ["monthly_dates_json", "TEXT"], ["custom_dates_json", "TEXT"],
+    ["start_date", "TEXT"], ["end_date", "TEXT"], ["mode", "TEXT"], ["notes", "TEXT"],
+    ["created_by", "TEXT"], ["updated_at", "TEXT"],
+  ];
+  for (const [c, t] of cols) {
+    try { await env.DB.prepare(`ALTER TABLE standing_orders ADD COLUMN ${c} ${t}`).run(); } catch { /* exists */ }
+  }
+}
+
+function recParseJson<T>(v: unknown, fallback: T): T {
+  if (typeof v !== "string" || !v.trim()) return fallback;
+  try { return JSON.parse(v) as T; } catch { return fallback; }
+}
+
+// A standing_orders row → the pure RecurrencePlan shape (+ the row's own fields).
+function normalizeRecPlan(row: Record<string, unknown>): RecurrencePlan & Record<string, unknown> {
+  return {
+    ...row,
+    freq: String(row.freq || "weekdays") as RecurrencePlan["freq"],
+    days: recParseJson<string[]>(row.days_json, []),
+    monthly_method: (String(row.monthly_method || "pattern") === "dates" ? "dates" : "pattern"),
+    monthly_dates: recParseJson<number[]>(row.monthly_dates_json, []),
+    custom_dates: recParseJson<string[]>(row.custom_dates_json, []),
+    start_date: String(row.start_date || "").slice(0, 10),
+    end_date: row.end_date ? String(row.end_date).slice(0, 10) : null,
+  };
+}
+
+function recScheduleLabel(p: RecurrencePlan): string {
+  if (p.freq === "custom") return `Custom · ${(p.custom_dates || []).length} date(s)`;
+  if (p.freq === "monthly") {
+    return (p.monthly_method === "dates")
+      ? `Monthly · day ${(p.monthly_dates || []).join(", ")}`
+      : `Monthly · ${(p.days || []).join(", ") || "pattern"}`;
+  }
+  const d = p.days || [];
+  if (d.length === 5 && ["Mon", "Tue", "Wed", "Thu", "Fri"].every(x => d.includes(x))) return "Every weekday (Mon–Fri)";
+  return `${p.freq === "weekly" ? "Weekly" : "Weekdays"} · ${d.join(", ")}`;
+}
+
+// Map an order status onto the occurrence status label shown in the UI.
+function recOrderStatusLabel(s: string): string {
+  if (s === "DRAFT") return "Draft generated";
+  if (s === "SUBMITTED" || s === "PENDING_PRICING") return "Submitted";
+  if (s === "PENDING_APPROVAL") return "Pending approval";
+  if (s === "CANCELLED" || s === "REJECTED") return "Cancelled";
+  if (s === "CLOSED" || s === "DELIVERED") return "Delivered";
+  if (["APPROVED", "ACKNOWLEDGED", "INVENTORY_CHECK", "VENDOR_PO_RAISED", "READY_TO_PICK", "PICKED", "QUALITY_CHECK", "IN_SHIPMENT", "PARTIALLY_CLOSED"].includes(s)) return "Approved";
+  return "Generated";
+}
+
+// Price + create one order for a plan occurrence. DRAFT by default; auto-submit
+// runs the same approval-rule gate as a manual order. No request/JWT needed, so
+// the cron can call it directly. Pricing uses client_catalog then the catalogue.
+async function createRecurringOrder(env: Env, plan: Record<string, unknown>, date: string): Promise<{ id: string; status: string; grand_total: number }> {
+  const clientId = String(plan.client_id);
+  const sku = String(plan.product_sku || "");
+  const inv = await env.DB.prepare("SELECT name, unit_price FROM inventory WHERE sku=?").bind(sku).first() as Record<string, unknown> | null;
+  let price = Number(inv?.unit_price || 0);
+  try {
+    const cc = await env.DB.prepare("SELECT client_price FROM client_catalog WHERE client_id=? AND sku=?").bind(clientId, sku).first() as Record<string, unknown> | null;
+    if (cc && cc.client_price != null) price = Number(cc.client_price);
+  } catch { /* client_catalog / client_price absent — catalogue price */ }
+  const name = String(plan.product_name || inv?.name || sku);
+  const qty = Math.max(1, Number(plan.qty) || 1);
+  const items = [{ sku, name, qty, unit_price: price }];
+  const subtotal = qty * price;
+  const gst = await computeOrderGst(env, items);
+  const grand_total = subtotal + gst;
+  const id = `SP-${new Date().toISOString().slice(2, 7).replace("-", "")}-${Math.floor(Math.random() * 9000 + 1000)}`;
+  const orderPeriod = date.slice(0, 7);
+  const autoSubmit = String(plan.mode || "Draft") === "Auto-submit";
+
+  let status = "DRAFT";
+  if (autoSubmit) {
+    const rule = await env.DB.prepare(`SELECT * FROM approval_rules WHERE active=1 AND (client_id=? OR client_id IS NULL)
+      AND min_amount<=? AND (max_amount IS NULL OR max_amount>?) ORDER BY min_amount DESC LIMIT 1`)
+      .bind(clientId, grand_total, grand_total).first() as Record<string, unknown> | null;
+    status = "SUBMITTED";
+    if (rule?.auto_approve) status = "APPROVED";
+    else if (grand_total > (Number(rule?.min_amount) || 100000)) status = "PENDING_APPROVAL";
+  }
+  const notes = `Recurring — ${String(plan.name || "")} for ${date}` + (plan.notes ? ` · ${String(plan.notes)}` : "");
+  const createdBy = plan.created_by ? String(plan.created_by) : null;
+  await env.DB.prepare(`INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type,need_by_date,order_period,order_reference) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .bind(id, clientId, createdBy, status, subtotal, gst, grand_total, notes, "Regular", date, orderPeriod, id).run();
+  await env.DB.prepare(`INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total,item_note) VALUES (?,?,?,?,?,?,?,?)`)
+    .bind(uid(), id, sku, name, qty, price, subtotal, null).run();
+  await env.DB.prepare(`INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,NULL,?,?,?,?)`)
+    .bind(uid(), id, status, createdBy, "Recurring scheduler", `Recurring ${autoSubmit ? "order" : "draft"} for ${date}`).run();
+  return { id, status, grand_total };
+}
+
+// The generation pass — nightly cron + manual trigger. For each active plan it
+// materialises occurrences due within [today, today+lead] that are not already
+// resolved into orders, recording a CREATED event. Idempotent: the (so_id,
+// cycle_date) UNIQUE + the pre-check make a re-run or double-fire a no-op.
+async function runRecurringGeneration(env: Env, opts?: { leadDays?: number }): Promise<{ generated: number; failed: number; plans: number }> {
+  await ensureRecurringSchema(env);
+  const lead = opts?.leadDays ?? 1;
+  const today = istTodayISO();
+  const horizon = addDaysISO(today, lead);
+  let generated = 0, failed = 0, planCount = 0;
+  let plans: Record<string, unknown>[] = [];
+  try {
+    const { results } = await env.DB.prepare("SELECT * FROM standing_orders WHERE active=1 AND freq IS NOT NULL").all();
+    plans = results as Record<string, unknown>[];
+  } catch { return { generated, failed, plans: 0 }; }
+  for (const row of plans) {
+    planCount++;
+    const plan = normalizeRecPlan(row);
+    const dates = recurringOccurrences(plan, today, horizon);
+    for (const date of dates) {
+      const ev = await env.DB.prepare("SELECT action FROM standing_order_events WHERE so_id=? AND cycle_date=?").bind(row.id, date).first();
+      if (ev) continue; // already SKIPPED or CREATED
+      try {
+        const created = await createRecurringOrder(env, row, date);
+        await env.DB.prepare("INSERT OR IGNORE INTO standing_order_events (id,so_id,cycle_date,action,order_id,actor_name) VALUES (?,?,?,?,?,?)")
+          .bind(uid(), row.id, date, "CREATED", created.id, "Recurring scheduler").run();
+        await env.DB.prepare("UPDATE standing_orders SET last_run_date=?, updated_at=datetime('now') WHERE id=?").bind(date, row.id).run();
+        generated++;
+      } catch (e) {
+        failed++;
+        console.error(`recurring generation failed for ${row.id} @ ${date}:`, String(e));
+        // No blocking ledger row on failure → the next pass retries this occurrence.
+      }
+    }
+  }
+  return { generated, failed, plans: planCount };
+}
+
+async function handleListRecurringPlans(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  await ensureRecurringSchema(env);
+  const isClient = ["client_admin", "client_approver", "client_user"].includes(user!.role);
+  let sql = `SELECT so.*, c.name AS client_name FROM standing_orders so LEFT JOIN clients c ON c.id=so.client_id WHERE so.freq IS NOT NULL`;
+  const binds: string[] = [];
+  if (isClient) { if (!user!.client_id) return json([]); sql += " AND so.client_id=?"; binds.push(user!.client_id); }
+  sql += " ORDER BY so.active DESC, so.created_at DESC";
+  let rows: Record<string, unknown>[] = [];
+  try { const { results } = await env.DB.prepare(sql).bind(...binds).all(); rows = results as Record<string, unknown>[]; } catch { return json([]); }
+  const today = istTodayISO();
+  const horizon = addDaysISO(today, 60);
+  const out = rows.map(r => {
+    const plan = normalizeRecPlan(r);
+    const upcoming = recurringOccurrences(plan, today, horizon);
+    return {
+      id: r.id, name: r.name, client_id: r.client_id, client_name: r.client_name,
+      site: r.site || null, product_sku: r.product_sku, product_name: r.product_name,
+      qty: r.qty, unit: r.unit, mode: r.mode || "Draft",
+      freq: plan.freq, schedule_label: recScheduleLabel(plan),
+      start_date: plan.start_date, end_date: plan.end_date,
+      status: Number(r.active) === 1 ? "Active" : "Paused",
+      next_date: upcoming[0] || null, notes: r.notes || "",
+    };
+  });
+  return json(out);
+}
+
+async function handleCreateRecurringPlan(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  await ensureRecurringSchema(env);
+  const body = await request.json() as Record<string, unknown>;
+  const isClient = ["client_admin", "client_approver", "client_user"].includes(user!.role);
+  let clientId = String(body.client_id || "");
+  if (isClient) { if (!user!.client_id) return json({ error: "Your account is not linked to a client." }, 400); clientId = user!.client_id; }
+  if (!clientId) return json({ error: "client_id is required." }, 400);
+  const cross = await denyClientCrossAccess(env, user!, clientId); if (cross) return cross;
+
+  const name = String(body.name || "").trim().slice(0, 120);
+  const sku = String(body.product_sku || "").trim().slice(0, 80);
+  const qty = Math.max(0, Number(body.qty) || 0);
+  const freq = String(body.freq || "weekdays");
+  if (!name) return json({ error: "Plan name is required." }, 400);
+  if (!sku) return json({ error: "A product is required." }, 400);
+  if (qty < 1) return json({ error: "Quantity must be at least 1." }, 400);
+  if (!["weekdays", "weekly", "monthly", "custom"].includes(freq)) return json({ error: "Invalid frequency." }, 400);
+
+  const startDate = /^\d{4}-\d{2}-\d{2}$/.test(String(body.start_date || "")) ? String(body.start_date) : istTodayISO();
+  const endDate = /^\d{4}-\d{2}-\d{2}$/.test(String(body.end_date || "")) ? String(body.end_date) : null;
+  if (endDate && endDate < startDate) return json({ error: "End date cannot be before the start date." }, 400);
+
+  let productName = String(body.product_name || "").trim();
+  if (!productName) {
+    const inv = await env.DB.prepare("SELECT name FROM inventory WHERE sku=?").bind(sku).first() as Record<string, unknown> | null;
+    productName = String(inv?.name || sku);
+  }
+  const days = Array.isArray(body.days) ? (body.days as unknown[]).map(d => String(d).slice(0, 3)).filter(d => REC_WEEKDAYS.includes(d)) : [];
+  const monthlyMethod = String(body.monthly_method || "pattern") === "dates" ? "dates" : "pattern";
+  const monthlyDates = Array.isArray(body.monthly_dates) ? (body.monthly_dates as unknown[]).map(Number).filter(n => Number.isInteger(n) && n >= 1 && n <= 31) : [];
+  const customDates = Array.isArray(body.custom_dates) ? (body.custom_dates as unknown[]).map(d => String(d).slice(0, 10)).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)) : [];
+
+  if ((freq === "weekdays" || freq === "weekly") && !days.length) return json({ error: "Select at least one weekday." }, 400);
+  if (freq === "monthly" && monthlyMethod === "dates" && !monthlyDates.length) return json({ error: "Enter at least one day of the month." }, 400);
+  if (freq === "monthly" && monthlyMethod === "pattern" && !days.length) return json({ error: "Select at least one weekday for the monthly pattern." }, 400);
+  if (freq === "custom" && !customDates.length) return json({ error: "Enter at least one custom date." }, 400);
+
+  const requestedMode = String(body.mode || "Draft") === "Auto-submit" ? "Auto-submit" : "Draft";
+  const mayAuto = REC_ADMIN_ROLES.includes(user!.role) || user!.role === "client_admin";
+  const mode = (requestedMode === "Auto-submit" && !mayAuto) ? "Draft" : requestedMode;
+
+  const id = `RP-${new Date().toISOString().slice(2, 10).replace(/-/g, "")}-${Math.floor(Math.random() * 900 + 100)}`;
+  const unit = String(body.unit || "").slice(0, 20);
+  const site = String(body.site || "").slice(0, 80);
+  const notes = String(body.notes || "").slice(0, 500);
+  const itemsJson = JSON.stringify([{ sku, name: productName, qty }]); // legacy calendar/materialize compat
+  const legacyFreq = freq === "monthly" ? "MONTHLY" : freq === "custom" ? "CUSTOM" : "WEEKLY";
+
+  await env.DB.prepare(`INSERT INTO standing_orders
+    (id, client_id, name, frequency, next_run_date, items, active,
+     site, product_sku, product_name, qty, unit, freq, days_json, monthly_method, monthly_dates_json, custom_dates_json, start_date, end_date, mode, notes, created_by, updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))`)
+    .bind(id, clientId, name, legacyFreq, startDate, itemsJson, 1,
+      site || null, sku, productName, qty, unit || null, freq, JSON.stringify(days), monthlyMethod, JSON.stringify(monthlyDates), JSON.stringify(customDates), startDate, endDate, mode, notes || null, user!.sub).run();
+  await audit(env, user, "CREATE", "recurring_plan", id, undefined, `${name} · ${freq} · ${mode}`);
+  return json({ id, mode, mode_downgraded: mode !== requestedMode }, 201);
+}
+
+async function handleGetRecurringPlan(request: Request, env: Env, id: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  await ensureRecurringSchema(env);
+  const row = await env.DB.prepare("SELECT so.*, c.name AS client_name FROM standing_orders so LEFT JOIN clients c ON c.id=so.client_id WHERE so.id=?").bind(id).first() as Record<string, unknown> | null;
+  if (!row) return json({ error: "Not found" }, 404);
+  const cross = await denyClientCrossAccess(env, user!, row.client_id); if (cross) return cross;
+  const plan = normalizeRecPlan(row);
+  const today = istTodayISO();
+  const from = addDaysISO(today, -14), to = addDaysISO(today, 60);
+  const dates = recurringOccurrences(plan, from, to);
+  const { results: evs } = await env.DB.prepare("SELECT cycle_date, action, order_id FROM standing_order_events WHERE so_id=?").bind(id).all();
+  const evMap: Record<string, { action: string; order_id?: string }> = {};
+  for (const e of evs as Record<string, unknown>[]) evMap[String(e.cycle_date)] = { action: String(e.action), order_id: e.order_id ? String(e.order_id) : undefined };
+  const orderIds = [...new Set(Object.values(evMap).map(e => e.order_id).filter(Boolean) as string[])];
+  const orderStatus: Record<string, string> = {};
+  for (const oid of orderIds) {
+    const o = await env.DB.prepare("SELECT status FROM orders WHERE id=?").bind(oid).first() as Record<string, unknown> | null;
+    if (o) orderStatus[oid] = String(o.status);
+  }
+  const occurrences = dates.map(d => {
+    const e = evMap[d];
+    let status = "Planned";
+    if (e?.action === "SKIPPED") status = "Skipped";
+    else if (e?.action === "CREATED" && e.order_id) status = recOrderStatusLabel(orderStatus[e.order_id] || "DRAFT");
+    else if (d < today) status = "Overdue";
+    return { date: d, status, order_id: e?.order_id || null };
+  });
+  return json({
+    id: row.id, name: row.name, client_id: row.client_id, client_name: row.client_name,
+    site: row.site, product_sku: row.product_sku, product_name: row.product_name, qty: row.qty, unit: row.unit,
+    mode: row.mode || "Draft", notes: row.notes || "", schedule_label: recScheduleLabel(plan),
+    freq: plan.freq, days: plan.days, monthly_method: plan.monthly_method, monthly_dates: plan.monthly_dates, custom_dates: plan.custom_dates,
+    start_date: plan.start_date, end_date: plan.end_date,
+    status: Number(row.active) === 1 ? "Active" : "Paused",
+    created_by: row.created_by, created_at: row.created_at, updated_at: row.updated_at,
+    occurrences,
+  });
+}
+
+async function handlePatchRecurringPlan(request: Request, env: Env, id: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  await ensureRecurringSchema(env);
+  const row = await env.DB.prepare("SELECT * FROM standing_orders WHERE id=?").bind(id).first() as Record<string, unknown> | null;
+  if (!row) return json({ error: "Not found" }, 404);
+  const cross = await denyClientCrossAccess(env, user!, row.client_id); if (cross) return cross;
+  const body = await request.json() as Record<string, unknown>;
+  const sets: string[] = []; const binds: unknown[] = [];
+  if (body.status !== undefined || typeof body.active === "boolean") {
+    const active = body.status !== undefined ? (String(body.status) === "Active" ? 1 : 0) : (body.active ? 1 : 0);
+    sets.push("active=?"); binds.push(active);
+  }
+  // Scalar edits — apply to FUTURE occurrences only; generated orders are untouched.
+  for (const [k, col] of [["name", "name"], ["qty", "qty"], ["unit", "unit"], ["site", "site"], ["notes", "notes"], ["end_date", "end_date"]] as Array<[string, string]>) {
+    if (body[k] !== undefined) { sets.push(`${col}=?`); binds.push(body[k] === "" ? null : body[k]); }
+  }
+  if (body.mode !== undefined) {
+    const mayAuto = REC_ADMIN_ROLES.includes(user!.role) || user!.role === "client_admin";
+    sets.push("mode=?"); binds.push(String(body.mode) === "Auto-submit" && mayAuto ? "Auto-submit" : "Draft");
+  }
+  if (body.freq !== undefined && ["weekdays", "weekly", "monthly", "custom"].includes(String(body.freq))) { sets.push("freq=?"); binds.push(String(body.freq)); }
+  if (body.monthly_method !== undefined) { sets.push("monthly_method=?"); binds.push(String(body.monthly_method) === "dates" ? "dates" : "pattern"); }
+  if (body.days !== undefined) { sets.push("days_json=?"); binds.push(JSON.stringify((Array.isArray(body.days) ? body.days : []).map(d => String(d).slice(0, 3)).filter(d => REC_WEEKDAYS.includes(d)))); }
+  if (body.monthly_dates !== undefined) { sets.push("monthly_dates_json=?"); binds.push(JSON.stringify((Array.isArray(body.monthly_dates) ? body.monthly_dates : []).map(Number).filter(n => Number.isInteger(n) && n >= 1 && n <= 31))); }
+  if (body.custom_dates !== undefined) { sets.push("custom_dates_json=?"); binds.push(JSON.stringify((Array.isArray(body.custom_dates) ? body.custom_dates : []).map(d => String(d).slice(0, 10)).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)))); }
+  if (!sets.length) return json({ error: "No changes supplied." }, 400);
+  sets.push("updated_at=datetime('now')");
+  binds.push(id);
+  await env.DB.prepare(`UPDATE standing_orders SET ${sets.join(",")} WHERE id=?`).bind(...binds).run();
+  await audit(env, user, "UPDATE", "recurring_plan", id, undefined, sets.join(","));
+  return json({ ok: true });
+}
+
+async function handleSkipRecurringOccurrence(request: Request, env: Env, id: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  const row = await env.DB.prepare("SELECT * FROM standing_orders WHERE id=?").bind(id).first() as Record<string, unknown> | null;
+  if (!row) return json({ error: "Not found" }, 404);
+  const cross = await denyClientCrossAccess(env, user!, row.client_id); if (cross) return cross;
+  const body = await request.json() as { date?: string };
+  const date = String(body.date || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({ error: "date (YYYY-MM-DD) required" }, 400);
+  const existing = await env.DB.prepare("SELECT action, order_id FROM standing_order_events WHERE so_id=? AND cycle_date=?").bind(id, date).first() as Record<string, unknown> | null;
+  if (existing) return json({ error: existing.order_id ? `An order was already generated for ${date}.` : `${date} is already resolved.` }, 409);
+  await env.DB.prepare("INSERT OR IGNORE INTO standing_order_events (id,so_id,cycle_date,action,actor_name) VALUES (?,?,?,?,?)").bind(uid(), id, date, "SKIPPED", user!.name).run();
+  await audit(env, user, "UPDATE", "recurring_plan", id, undefined, `skip:${date}`);
+  return json({ ok: true });
+}
+
+async function handleGenerateRecurringOccurrence(request: Request, env: Env, id: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  await ensureRecurringSchema(env);
+  const row = await env.DB.prepare("SELECT * FROM standing_orders WHERE id=?").bind(id).first() as Record<string, unknown> | null;
+  if (!row) return json({ error: "Not found" }, 404);
+  const cross = await denyClientCrossAccess(env, user!, row.client_id); if (cross) return cross;
+  const body = await request.json().catch(() => ({})) as { date?: string };
+  const plan = normalizeRecPlan(row);
+  let date = String(body.date || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    const today = istTodayISO();
+    date = recurringOccurrences(plan, today, addDaysISO(today, 60))[0] || "";
+    if (!date) return json({ error: "No upcoming occurrence to generate." }, 400);
+  }
+  const existing = await env.DB.prepare("SELECT action, order_id FROM standing_order_events WHERE so_id=? AND cycle_date=?").bind(id, date).first() as Record<string, unknown> | null;
+  if (existing) return json({ error: existing.order_id ? `An order (${existing.order_id}) already exists for ${date}.` : `${date} was skipped.` }, 409);
+  let created: { id: string; status: string; grand_total: number };
+  try { created = await createRecurringOrder(env, { ...row, created_by: row.created_by || user!.sub }, date); }
+  catch (e) { return json({ error: "Could not generate the order: " + String(e) }, 500); }
+  await env.DB.prepare("INSERT OR IGNORE INTO standing_order_events (id,so_id,cycle_date,action,order_id,actor_name) VALUES (?,?,?,?,?,?)").bind(uid(), id, date, "CREATED", created.id, user!.name).run();
+  await env.DB.prepare("UPDATE standing_orders SET last_run_date=?, updated_at=datetime('now') WHERE id=?").bind(date, id).run();
+  await audit(env, user, "CREATE", "recurring_order", id, undefined, `order:${created.id},date:${date}`);
+  return json({ ok: true, order_id: created.id, order_status: created.status, date }, 201);
+}
+
+async function handleListRecurringOccurrences(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  await ensureRecurringSchema(env);
+  const url = new URL(request.url);
+  const today = istTodayISO();
+  const fromQ = url.searchParams.get("from") || ""; const toQ = url.searchParams.get("to") || "";
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(fromQ) ? fromQ : addDaysISO(today, -7);
+  const to = /^\d{4}-\d{2}-\d{2}$/.test(toQ) ? toQ : addDaysISO(today, 45);
+  const isClient = ["client_admin", "client_approver", "client_user"].includes(user!.role);
+  let sql = `SELECT so.*, c.name AS client_name FROM standing_orders so LEFT JOIN clients c ON c.id=so.client_id WHERE so.active=1 AND so.freq IS NOT NULL`;
+  const binds: string[] = [];
+  if (isClient) { if (!user!.client_id) return json([]); sql += " AND so.client_id=?"; binds.push(user!.client_id); }
+  let rows: Record<string, unknown>[] = [];
+  try { const { results } = await env.DB.prepare(sql).bind(...binds).all(); rows = results as Record<string, unknown>[]; } catch { return json([]); }
+  const out: Array<Record<string, unknown>> = [];
+  for (const row of rows) {
+    const plan = normalizeRecPlan(row);
+    const dates = recurringOccurrences(plan, from, to);
+    if (!dates.length) continue;
+    const { results: evs } = await env.DB.prepare("SELECT cycle_date, action, order_id FROM standing_order_events WHERE so_id=? AND cycle_date>=? AND cycle_date<=?").bind(row.id, from, to).all();
+    const evMap: Record<string, Record<string, unknown>> = {};
+    for (const e of evs as Record<string, unknown>[]) evMap[String(e.cycle_date)] = e;
+    for (const d of dates) {
+      const e = evMap[d];
+      let status = "Planned"; let orderId: string | null = null;
+      if (e) {
+        orderId = e.order_id ? String(e.order_id) : null;
+        if (String(e.action) === "SKIPPED") status = "Skipped";
+        else if (orderId) {
+          const o = await env.DB.prepare("SELECT status FROM orders WHERE id=?").bind(orderId).first() as Record<string, unknown> | null;
+          status = recOrderStatusLabel(o ? String(o.status) : "DRAFT");
+        }
+      } else if (d < today) status = "Overdue";
+      out.push({ date: d, plan_id: row.id, plan_name: row.name, product_name: row.product_name, qty: row.qty, unit: row.unit, site: row.site || null, client_name: row.client_name, status, order_id: orderId });
+    }
+  }
+  out.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  return json(out);
+}
+
+async function handleRunRecurring(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!REC_ADMIN_ROLES.includes(user!.role)) return json({ error: "Forbidden — ops/admin only." }, 403);
+  const body = await request.json().catch(() => ({})) as { lead_days?: number };
+  const res = await runRecurringGeneration(env, { leadDays: Math.max(0, Math.min(14, Number(body.lead_days) || 1)) });
+  await audit(env, user, "RUN", "recurring_generation", "manual", undefined, JSON.stringify(res));
+  return json({ ok: true, ...res });
 }
 
 // ════════════════════════════════════════════════════════════════════
