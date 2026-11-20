@@ -17017,9 +17017,10 @@ async function handleGetRecurringPlan(request: Request, env: Env, id: string): P
   for (const e of evs as Record<string, unknown>[]) evMap[String(e.cycle_date)] = { action: String(e.action), order_id: e.order_id ? String(e.order_id) : undefined };
   const orderIds = [...new Set(Object.values(evMap).map(e => e.order_id).filter(Boolean) as string[])];
   const orderStatus: Record<string, string> = {};
+  const orderTotal: Record<string, number> = {};
   for (const oid of orderIds) {
-    const o = await env.DB.prepare("SELECT status FROM orders WHERE id=?").bind(oid).first() as Record<string, unknown> | null;
-    if (o) orderStatus[oid] = String(o.status);
+    const o = await env.DB.prepare("SELECT status, grand_total FROM orders WHERE id=?").bind(oid).first() as Record<string, unknown> | null;
+    if (o) { orderStatus[oid] = String(o.status); orderTotal[oid] = Number(o.grand_total) || 0; }
   }
   const occurrences = dates.map(d => {
     const e = evMap[d];
@@ -17027,7 +17028,7 @@ async function handleGetRecurringPlan(request: Request, env: Env, id: string): P
     if (e?.action === "SKIPPED") status = "Skipped";
     else if (e?.action === "CREATED" && e.order_id) status = recOrderStatusLabel(orderStatus[e.order_id] || "DRAFT");
     else if (d < today) status = "Overdue";
-    return { date: d, status, order_id: e?.order_id || null };
+    return { date: d, status, order_id: e?.order_id || null, order_total: (e?.order_id && orderTotal[e.order_id] != null) ? orderTotal[e.order_id] : null };
   });
   return json({
     id: row.id, name: row.name, client_id: row.client_id, client_name: row.client_name,

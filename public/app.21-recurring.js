@@ -211,67 +211,175 @@ function recRenderCalendar(body) {
 function recCalMove(n) { let m = APP._recCalM + n, y = APP._recCalY; if (m < 0) { m = 11; y--; } if (m > 11) { m = 0; y++; } APP._recCalM = m; APP._recCalY = y; recRenderBody(); }
 function recCalToday() { const n = new Date(); APP._recCalM = n.getMonth(); APP._recCalY = n.getFullYear(); recRenderBody(); }
 
-/* ── Plan detail ───────────────────────────────────────────── */
+/* ── Plan detail ("order view") — ERP record page ──────────────
+   Breadcrumb + header actions, a KPI strip, a lifecycle stepper, and
+   four tabs: Overview · Occurrences · Linked orders · Audit. */
 async function recDetail(id) {
   const main = document.getElementById('main-content') || document.querySelector('.content');
   if (main) main.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;padding:48px"><span class="u-muted">Loading plan…</span></div>`;
   const p = await api('/recurring-plans/' + id).catch(() => null);
   if (!p || p.error) { showToast('Could not load plan', 'error'); navigate('recurring'); return; }
   APP._recDetailData = p;
-  const occRows = (p.occurrences || []).map(o => `
-    <tr>
-      <td>${fmtDate(o.date)}</td>
-      <td>${recBadge(o.status)}</td>
-      <td>${o.order_id ? `<button class="btn btn-secondary btn-sm" ${dataAct('viewOrder', o.order_id)}>${h(o.order_id)}</button>` : '—'}</td>
-      <td class="u-right">
-        ${(o.status === 'Planned' || o.status === 'Overdue') ? `<button class="btn btn-gold btn-sm" ${dataAct('recGenerate', p.id, o.date)}>Generate</button>` : ''}
-        ${(o.status === 'Planned' || o.status === 'Overdue') ? `<button class="btn btn-secondary btn-sm" ${dataAct('recSkip', p.id, o.date)}>Skip</button>` : ''}
-      </td>
-    </tr>`).join('') || `<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:20px">No occurrences in this window.</td></tr>`;
-  const kv = (k, v) => `<div><div class="u-muted-xs">${h(k)}</div><div style="font-weight:650;margin-top:2px">${v}</div></div>`;
-  main.innerHTML = `
-    <div style="max-width:1040px;margin:0 auto">
-      <button class="btn btn-secondary btn-sm" ${dataAct('navigate', 'recurring')}>← Back to plans</button>
-      <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-start;margin:14px 0">
-        <div>
-          <div style="font-size:1.25rem;font-weight:800;color:var(--navy)">${h(p.name)}</div>
-          <div class="u-muted-xs">${h(p.id)} · ${h(p.client_name || '')} ${recBadge(p.status)}</div>
-        </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-secondary" ${dataAct('recEditModal', p.id)}>Edit plan</button>
-          <button class="btn btn-gold" ${dataAct('recGenerate', p.id)}>Generate next now</button>
-          <button class="btn btn-secondary" ${dataAct('recTogglePause', p.id)}>${p.status === 'Active' ? 'Pause plan' : 'Resume plan'}</button>
-        </div>
-      </div>
-      <div style="display:grid;grid-template-columns:1.3fr 1fr;gap:14px" class="rec-detailgrid">
-        <div class="card" style="padding:16px;margin:0">
-          <div style="font-weight:750;margin-bottom:12px;color:var(--navy)">Plan configuration</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:13px">
+  if (!APP._recDetTab) APP._recDetTab = 'ov';
+  main.innerHTML = recDetailHtml(p);
+}
+
+function recDetTab(t) {
+  APP._recDetTab = t;
+  ['ov', 'occ', 'lnk', 'aud'].forEach(x => { const e = document.getElementById('recpane-' + x); if (e) e.style.display = x === t ? '' : 'none'; });
+  document.querySelectorAll('[data-rectab]').forEach(b => {
+    const on = b.getAttribute('data-rectab') === t;
+    b.style.color = on ? 'var(--teal,var(--primary))' : 'var(--text-muted)';
+    b.style.borderBottomColor = on ? 'var(--teal,var(--primary))' : 'transparent';
+  });
+}
+
+function recDetailHtml(p) {
+  const occ = p.occurrences || [];
+  const today = new Date().toISOString().slice(0, 10);
+  const month = today.slice(0, 7);
+  const upcoming = occ.filter(o => o.date >= today);
+  const recent = occ.filter(o => o.date < today).reverse();
+  const linked = occ.filter(o => o.order_id);
+  const nextOcc = upcoming.find(o => o.status === 'Planned' || o.status === 'Overdue') || upcoming[0] || null;
+  const schedThisMonth = occ.filter(o => o.date.slice(0, 7) === month);
+  const genThisMonth = schedThisMonth.filter(o => o.order_id).length;
+  const awaiting = occ.filter(o => ['Draft generated', 'Pending approval', 'Overdue'].includes(o.status)).length;
+  const qtyLabel = `${h(String(p.qty || ''))} ${h(p.unit || '')}`.trim();
+
+  const tile = (k, v, s, warn) => `<div class="card" style="margin:0;padding:13px 15px">
+    <div style="font-size:.7rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;font-weight:700">${h(k)}</div>
+    <div style="font-size:1.4rem;font-weight:800;margin-top:4px;color:${warn ? 'var(--warning,#b45309)' : 'var(--navy)'}">${v}</div>
+    <div style="font-size:.72rem;color:var(--text-muted);margin-top:1px">${s}</div></div>`;
+
+  const kpis = `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px" class="rec-kpis">
+    ${tile('Next delivery', nextOcc ? fmtDate(nextOcc.date) : '—', nextOcc ? qtyLabel : 'nothing scheduled')}
+    ${tile('Cadence', h(p.schedule_label || '—'), p.mode || 'Draft')}
+    ${tile('Generated (this month)', `${genThisMonth}<span style="font-size:.9rem;color:var(--text-muted)"> / ${schedThisMonth.length}</span>`, 'occurrences')}
+    ${tile('Awaiting action', String(awaiting), awaiting ? 'needs review' : 'all clear', awaiting > 0)}
+  </div>`;
+
+  const active = p.status === 'Active';
+  const step = (cls, label, sub) => `<div style="flex:1;min-width:120px;border-top:3px solid ${cls === 'done' ? 'var(--success)' : cls === 'now' ? 'var(--teal,var(--primary))' : 'var(--border)'};padding-top:8px;font-size:.78rem;color:${cls === 'done' ? 'var(--success)' : cls === 'now' ? 'var(--teal,var(--primary))' : 'var(--text-muted)'};font-weight:${cls === 'now' ? '700' : '400'}">${label}<small style="display:block;color:var(--text-muted);font-weight:400;margin-top:1px">${sub}</small></div>`;
+  const stepper = `<div class="card" style="margin:0 0 16px;padding:14px 16px;display:flex;gap:4px;overflow-x:auto">
+    ${step('done', 'Plan created', p.created_at ? fmtDate(p.created_at) : '—')}
+    ${step('now', active ? 'Active & generating' : 'Paused', active ? 'generating orders' : 'resume any time')}
+    ${step('', 'Occurrence due', nextOcc ? fmtDate(nextOcc.date) : '—')}
+    ${step('', 'Orders fulfilled', 'per delivery')}
+  </div>`;
+
+  const tabBtn = (t, label, cnt) => {
+    const on = (APP._recDetTab || 'ov') === t;
+    return `<button data-rectab="${t}" ${dataAct('recDetTab', t)} style="appearance:none;border:0;background:none;font:inherit;font-weight:650;font-size:.86rem;padding:11px 13px;border-bottom:2px solid ${on ? 'var(--teal,var(--primary))' : 'transparent'};color:${on ? 'var(--teal,var(--primary))' : 'var(--text-muted)'};cursor:pointer;white-space:nowrap">${label}${cnt != null ? ` <span style="font-size:.72rem;background:var(--surface-2);border-radius:999px;padding:1px 7px;font-weight:700">${cnt}</span>` : ''}</button>`;
+  };
+
+  // weekday strip for the Overview
+  const wd = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const showWeek = p.freq === 'weekdays' || p.freq === 'weekly' || (p.freq === 'monthly' && (p.monthly_method || 'pattern') === 'pattern');
+  const days = p.days || [];
+  const weekStrip = showWeek ? `<div style="margin-top:12px"><div style="font-size:.7rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.03em;font-weight:700">Repeats on</div>
+    <div style="display:flex;gap:5px;margin-top:8px;flex-wrap:wrap">${wd.map(d => { const on = days.includes(d); return `<div style="width:34px;height:30px;border-radius:7px;border:1px solid ${on ? 'var(--teal,var(--primary))' : 'var(--border)'};display:flex;align-items:center;justify-content:center;font-size:.72rem;font-weight:700;color:${on ? '#fff' : 'var(--text-muted)'};background:${on ? 'var(--teal,var(--primary))' : 'var(--surface-2)'}">${d[0]}</div>`; }).join('')}</div>
+    <p class="u-muted-xs" style="margin-top:8px">Delivered on the exact date — no holiday shifting.</p></div>` : '';
+
+  const kv = (k, v) => `<div><div style="font-size:.7rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.03em;font-weight:700">${h(k)}</div><div style="font-weight:650;margin-top:3px">${v}</div></div>`;
+
+  // ── Overview pane
+  const paneOv = `<div id="recpane-ov" style="display:${(APP._recDetTab || 'ov') === 'ov' ? '' : 'none'}">
+    <div style="display:grid;grid-template-columns:1.3fr 1fr;gap:14px" class="rec-detailgrid">
+      <div class="card" style="margin:0">
+        <div style="font-weight:800;color:var(--navy);padding:14px 16px;border-bottom:1px solid var(--border);font-size:.9rem">Schedule &amp; configuration</div>
+        <div style="padding:15px 16px">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
             ${kv('Product', h(p.product_name || ''))}
-            ${kv('Quantity / delivery', `${h(String(p.qty || ''))} ${h(p.unit || '')}`)}
-            ${kv('Schedule', h(p.schedule_label || ''))}
-            ${kv('Location', h(p.site || '—'))}
+            ${kv('Quantity / delivery', qtyLabel || '—')}
+            ${kv('Delivery location', h(p.site || '—'))}
             ${kv('Generation mode', h(p.mode || 'Draft'))}
-            ${kv('Start', p.start_date ? fmtDate(p.start_date) : '—')}
-            ${kv('End', p.end_date ? fmtDate(p.end_date) : 'Open-ended')}
+            ${kv('Start date', p.start_date ? fmtDate(p.start_date) : '—')}
+            ${kv('End date', p.end_date ? fmtDate(p.end_date) : 'Open-ended')}
           </div>
+          ${weekStrip}
           ${p.notes ? `<p class="u-muted-xs" style="margin-top:12px">Instructions: ${h(p.notes)}</p>` : ''}
         </div>
-        <div class="card" style="padding:16px;margin:0">
-          <div style="font-weight:750;margin-bottom:8px;color:var(--navy)">Plan controls</div>
-          <p class="u-muted-xs" style="margin:0 0 12px">Edits apply to future occurrences only. Already-generated orders are unchanged.</p>
+      </div>
+      <div class="card" style="margin:0">
+        <div style="font-weight:800;color:var(--navy);padding:14px 16px;border-bottom:1px solid var(--border);font-size:.9rem">Controls</div>
+        <div style="padding:15px 16px">
+          <p class="u-muted-xs" style="margin:0 0 12px">Changes apply to future occurrences only. Already-generated orders are unchanged.</p>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button class="btn btn-secondary btn-sm" ${dataAct('recEditModal', p.id)}>Edit schedule</button>
-            <button class="btn btn-secondary btn-sm" ${dataAct('recGenerate', p.id)}>Generate next occurrence</button>
+            <button class="btn btn-secondary btn-sm" ${dataAct('recGenerate', p.id)}>Generate next</button>
+            ${nextOcc ? `<button class="btn btn-secondary btn-sm" ${dataAct('recSkip', p.id, nextOcc.date)}>Skip next</button>` : ''}
           </div>
-          <div style="font-weight:700;margin-top:16px;font-size:.84rem;color:var(--navy)">Mode</div>
-          <div class="u-muted-xs">${p.mode === 'Auto-submit' ? 'Orders submit automatically where approval & budget allow.' : 'Orders are created as drafts for review before submission.'}</div>
+          <div style="font-weight:700;margin-top:16px;font-size:.82rem;color:var(--navy)">Generation mode</div>
+          <div class="u-muted-xs" style="margin-top:3px">${p.mode === 'Auto-submit' ? 'Orders submit automatically where approval &amp; budget allow.' : 'Each occurrence creates a draft to review and submit.'}</div>
         </div>
       </div>
-      <div style="font-weight:750;margin:20px 0 10px;color:var(--navy)">Upcoming & recent occurrences</div>
-      <div class="card" style="padding:0;margin:0"><div class="table-wrap" style="overflow:auto">
-        <table class="table" style="margin:0"><thead><tr><th>Date</th><th>Status</th><th>Order</th><th></th></tr></thead><tbody>${occRows}</tbody></table>
-      </div></div>
+    </div></div>`;
+
+  // ── Occurrences pane (upcoming / recent)
+  const occRow = o => `<tr>
+      <td>${fmtDate(o.date)}</td><td>${qtyLabel}</td><td>${recBadge(o.status)}</td>
+      <td>${o.order_id ? `<button class="btn btn-secondary btn-sm" ${dataAct('viewOrder', o.order_id)}>${h(o.order_id)}</button>` : '—'}</td>
+      <td class="u-right">
+        ${(o.status === 'Planned' || o.status === 'Overdue') ? `<button class="btn btn-gold btn-sm" ${dataAct('recGenerate', p.id, o.date)}>Generate</button> <button class="btn btn-secondary btn-sm" ${dataAct('recSkip', p.id, o.date)}>Skip</button>` : (o.order_id ? `<button class="btn btn-secondary btn-sm" ${dataAct('viewOrder', o.order_id)}>View</button>` : '')}
+      </td></tr>`;
+  const occTable = (rows, empty) => `<div class="table-wrap" style="overflow:auto"><table class="table" style="margin:0">
+    <thead><tr><th>Date</th><th>Qty</th><th>Status</th><th>Order</th><th></th></tr></thead>
+    <tbody>${rows.length ? rows.map(occRow).join('') : `<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:18px">${empty}</td></tr>`}</tbody></table></div>`;
+  const paneOcc = `<div id="recpane-occ" style="display:${APP._recDetTab === 'occ' ? '' : 'none'}">
+    <div class="card" style="margin:0">
+      <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);padding:10px 16px;background:var(--surface-2);border-bottom:1px solid var(--border)">Upcoming</div>
+      ${occTable(upcoming, 'No upcoming occurrences in this window.')}
+      <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);padding:10px 16px;background:var(--surface-2);border-top:1px solid var(--border);border-bottom:1px solid var(--border)">Recent</div>
+      ${occTable(recent, 'No past occurrences yet.')}
+    </div></div>`;
+
+  // ── Linked orders pane
+  const lnkRows = linked.map(o => `<tr>
+      <td><button class="btn btn-secondary btn-sm" ${dataAct('viewOrder', o.order_id)}>${h(o.order_id)}</button></td>
+      <td>${fmtDate(o.date)}</td><td>${qtyLabel}</td>
+      <td>${o.order_total != null ? fmt(o.order_total) : '—'}</td>
+      <td>${recBadge(o.status)}</td>
+    </tr>`).join('') || `<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:18px">No orders generated from this plan yet.</td></tr>`;
+  const paneLnk = `<div id="recpane-lnk" style="display:${APP._recDetTab === 'lnk' ? '' : 'none'}">
+    <div class="card" style="margin:0"><div class="table-wrap" style="overflow:auto"><table class="table" style="margin:0">
+      <thead><tr><th>Order</th><th>For date</th><th>Qty</th><th>Value</th><th>Status</th></tr></thead>
+      <tbody>${lnkRows}</tbody></table></div></div></div>`;
+
+  // ── Audit pane (what the detail endpoint gives us, plus derived order events)
+  const auditLine = (t, txt) => `<div style="display:flex;gap:11px;font-size:.83rem;padding:9px 0;border-bottom:1px solid var(--border)"><time style="color:var(--text-muted);min-width:150px;flex:none">${t}</time><span>${txt}</span></div>`;
+  const auditRows = [
+    p.updated_at && p.updated_at !== p.created_at ? auditLine(fmtDateTime(p.updated_at), 'Plan last updated') : '',
+    ...linked.slice(0, 20).map(o => auditLine(fmtDate(o.date), `Order <b>${h(o.order_id)}</b> generated for this date`)),
+    p.created_at ? auditLine(fmtDateTime(p.created_at), 'Plan created') : '',
+  ].filter(Boolean).join('');
+  const paneAud = `<div id="recpane-aud" style="display:${APP._recDetTab === 'aud' ? '' : 'none'}">
+    <div class="card" style="margin:0;padding:6px 16px">${auditRows || '<p class="u-muted-xs" style="padding:12px 0">No activity recorded yet.</p>'}</div></div>`;
+
+  return `
+    <div style="max-width:1040px;margin:0 auto">
+      <div style="font-size:.78rem;color:var(--text-muted);margin-bottom:10px">
+        <a href="#" ${dataAct('navigate', 'recurring')} data-prevent style="color:var(--teal,var(--primary));text-decoration:none;font-weight:600">Recurring Orders</a> › ${h(p.id)}</div>
+      <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-start;margin-bottom:16px">
+        <div>
+          <div style="font-size:1.35rem;font-weight:800;color:var(--navy);display:flex;align-items:center;gap:10px;flex-wrap:wrap">${h(p.name)} ${recBadge(p.status)}</div>
+          <div class="u-muted-xs" style="margin-top:4px">${h(p.id)} · ${h(p.client_name || '')}${p.site ? ' · ' + h(p.site) : ''}</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-gold" ${dataAct('recGenerate', p.id)}>⚡ Generate next</button>
+          <button class="btn btn-secondary" ${dataAct('recEditModal', p.id)}>✎ Edit</button>
+          <button class="btn btn-secondary" ${dataAct('recTogglePause', p.id)}>${active ? '⏸ Pause' : '▶ Resume'}</button>
+        </div>
+      </div>
+      ${kpis}
+      ${stepper}
+      <div style="display:flex;gap:4px;border-bottom:1px solid var(--border);margin-bottom:16px;overflow-x:auto">
+        ${tabBtn('ov', 'Overview')}
+        ${tabBtn('occ', 'Occurrences', occ.length)}
+        ${tabBtn('lnk', 'Linked orders', linked.length)}
+        ${tabBtn('aud', 'Audit')}
+      </div>
+      ${paneOv}${paneOcc}${paneLnk}${paneAud}
     </div>`;
 }
 
