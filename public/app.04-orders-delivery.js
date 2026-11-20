@@ -3315,6 +3315,7 @@ async function renderOrderQueue(el) {
   if (!APP._oqTab)   APP._oqTab   = 'orders';
   if (!APP._oqMonth) APP._oqMonth = '';          // '' = all months
   if (!APP._oqItemView) APP._oqItemView = 'brand';
+  if (APP._oqMinimised === undefined) { try { APP._oqMinimised = localStorage.getItem('oq_min') === '1'; } catch (_) { APP._oqMinimised = false; } }
   APP._oqOrders = orders;
   APP._consolOrders = orders; oqConsolReset();
 
@@ -3465,19 +3466,24 @@ async function renderOrderQueue(el) {
       <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">Order Queue</div>
       <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px" id="oq-subtitle">${filteredOrders().filter(o=>!['CLOSED','CANCELLED'].includes(o.status)).length} active orders</div>
     </div>
-    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <button class="filter-select" id="oq-min-toggle" ${dataAct('oqToggleMinimise')}
+        title="Collapse the summary tiles for a full-width order list"
+        style="font-size:.82rem;cursor:pointer;${APP._oqMinimised?'background:var(--navy);color:#fff;border-color:var(--navy)':''}">${APP._oqMinimised?'⊞ Full view':'⊟ Minimise'}</button>
+    </div>
+  </div>
+
+  <div id="oq-kpi"${APP._oqMinimised?' style="display:none"':''}>${oqKpiHtml(filteredOrders())}</div>
+
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:14px;flex-wrap:wrap;margin-bottom:14px">
+    <div id="oq-deliv-chips"${APP._oqMinimised?' style="display:none"':''}>${oqDelivChipsHtml()}</div>
+    <div style="display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;margin-left:auto">
       <div id="oq-month-picker">${monthPickerHtml()}</div>
       ${oqIndexCanSet() ? `<button class="filter-select" id="oq-needs-idx" ${dataAct('oqToggleNeedsIndex')}
         title="Approved orders still missing a monthly index"
         style="font-size:.82rem;cursor:pointer;${APP._oqIdxFilter==='needs'?'background:var(--navy);color:#fff;border-color:var(--navy)':''}">⚑ Needs index${(()=>{const n=orders.filter(oqNeedsIndex).length;return n?` (${n})`:'';})()}</button>` : ''}
+      <div id="oq-client-box">${oqClientSearchHtml()}</div>
     </div>
-  </div>
-
-  <div id="oq-kpi">${oqKpiHtml(filteredOrders())}</div>
-
-  <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:14px;flex-wrap:wrap;margin-bottom:14px">
-    <div id="oq-deliv-chips">${oqDelivChipsHtml()}</div>
-    <div id="oq-client-box">${oqClientSearchHtml()}</div>
   </div>
 
   <div class="tabs" style="margin-bottom:16px">
@@ -3521,6 +3527,22 @@ function oqMainContentHtml(tab) {
   if (tab === 'items')    return '<div id="oq-items-area"><div class="loading-state"><div class="spinner"></div><p>Loading line items…</p></div></div>';
   if (tab === 'operator') return '<div id="oq-operator-area"><div class="loading-state"><div class="spinner"></div><p>Loading worklist…</p></div></div>';
   return oqOrdersTableHtml();
+}
+
+// Full-view toggle: collapse the KPI tiles + delivery chips so the order list fills
+// the screen. Month, Needs index and client search stay visible. Remembered per browser.
+function oqToggleMinimise() {
+  APP._oqMinimised = !APP._oqMinimised;
+  try { localStorage.setItem('oq_min', APP._oqMinimised ? '1' : '0'); } catch (_) { /* ignore */ }
+  const kpi = document.getElementById('oq-kpi'); if (kpi) kpi.style.display = APP._oqMinimised ? 'none' : '';
+  const chips = document.getElementById('oq-deliv-chips'); if (chips) chips.style.display = APP._oqMinimised ? 'none' : '';
+  const btn = document.getElementById('oq-min-toggle');
+  if (btn) {
+    btn.textContent = APP._oqMinimised ? '⊞ Full view' : '⊟ Minimise';
+    btn.style.background = APP._oqMinimised ? 'var(--navy)' : '';
+    btn.style.color = APP._oqMinimised ? '#fff' : '';
+    btn.style.borderColor = APP._oqMinimised ? 'var(--navy)' : '';
+  }
 }
 
 function oqSetMonth(m) {
@@ -4105,11 +4127,12 @@ async function dispatchRemainingModal(orderId) {
 }
 
 async function preCloseOrder(orderId) {
-  openModal('Pre-Close Order',
-    `<p>Pre-closing <b>${orderId}</b> will mark it as <b>CLOSED</b> without completing all deliveries.</p>
-     <p style="color:var(--warning);margin-top:8px;font-size:.87rem">⚠️ Any remaining scheduled DCs will be left undelivered. Only a super admin can reopen it afterwards.</p>`,
+  openModal(`Close order ${orderId}?`,
+    `<p class="u-muted" style="margin:0">Closing marks the order complete and stops any further dispatch.</p>
+     <div style="display:flex;gap:9px;background:var(--warning-bg,#fff8e1);border:1px solid color-mix(in srgb,var(--warning) 35%,var(--border));border-radius:9px;padding:10px 12px;margin-top:12px;font-size:.85rem">
+       <span>🚚</span><span><b>Deliveries may still be due</b> on this order. Any remaining units will be left undelivered. A super admin can reopen it later.</span></div>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
-     <button class="btn btn-danger" ${dataAct('confirmPreClose', orderId)}>Pre-Close Order</button>`);
+     <button class="btn btn-danger" ${dataAct('confirmPreClose', orderId)}>Confirm &amp; Close</button>`);
 }
 
 // Reopen a CLOSED order — super-admin only (backend also enforces this). Moves it
