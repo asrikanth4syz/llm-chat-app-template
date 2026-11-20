@@ -1061,7 +1061,7 @@ async function viewOrder(id) {
     ${order.history?.length ? orderSection('Timeline', `${order.history.length} event${order.history.length>1?'s':''}`,
       `<div style="display:grid;gap:6px">
       ${order.history.map(h=>`<div style="display:flex;gap:8px;font-size:.82rem">
-        <span style="color:var(--text-muted);min-width:90px">${fmtDate(h.created_at)}</span>
+        <span style="color:var(--text-muted);min-width:150px">${fmtDateTime(h.created_at)}</span>
         <span>${statusBadge(h.to_status)}</span>
         <span class="u-muted">${h.actor_name||''} ${h.note?'— '+h.note:''}</span>
       </div>`).join('')}
@@ -1119,6 +1119,8 @@ async function viewOrder(id) {
           footer.push(`<button class="btn btn-secondary" ${dataActClose('dispatchRemainingModal', id)}>Dispatch Remaining</button>`);
           footer.push(`<button class="btn btn-danger" ${dataActClose('preCloseOrder', id)}>Pre-Close Order</button>`);
         }
+        if (s==='CLOSED' && APP.user?.role==='super_admin')
+          footer.push(`<button class="btn btn-warning" ${dataActClose('reopenOrderModal', id)}>↩ Reopen Order</button>`);
         if (!['CLOSED','CANCELLED'].includes(s))
           footer.push(`<button class="btn btn-danger" ${dataActClose('opsRejectOrder', id)}>Cancel Order</button>`);
       } else {
@@ -1304,6 +1306,7 @@ function ofShellHtml() {
     canExport ? `<button ${dataAct('ofMorePDF', id)}>⬇ Export PDF</button>` : '',
     canAdjustQty ? `<button ${dataAct('ofMoreAdjustQty', id)}>⚖ Adjust ordered qty…</button>` : '',
     canPreClose ? `<button ${dataAct('preCloseOrder', id)}>Pre-close order…</button>` : '',
+    (s === 'CLOSED' && APP.user?.role === 'super_admin') ? `<button ${dataAct('reopenOrderModal', id)}>↩ Reopen order…</button>` : '',
     canCancel ? `<button class="d" ${dataAct('orderCancelDialog', id)}>Cancel order…</button>` : '',
   ].filter(Boolean).join('');
   return `
@@ -1565,7 +1568,7 @@ function ofTabAmend() {
 function ofTabTimeline() {
   const c = APP._ofCtx, hist = c.order.history || [];
   return `<div class="card" style="margin-top:12px"><h2 style="font-size:.95rem;margin:0 0 10px;color:var(--navy)">Timeline</h2>${hist.length
-    ? `<div style="display:grid;gap:6px">${hist.slice().reverse().map(ev => `<div style="display:flex;gap:10px;font-size:.84rem"><span style="color:var(--text-muted);min-width:96px">${fmtDate(ev.created_at)}</span><span>${statusBadge(ev.to_status)}</span><span class="u-muted">${h(ev.actor_name || '')}${ev.note ? ' — ' + h(ev.note) : ''}</span></div>`).join('')}</div>`
+    ? `<div style="display:grid;gap:6px">${hist.slice().reverse().map(ev => `<div style="display:flex;gap:10px;font-size:.84rem"><span style="color:var(--text-muted);min-width:150px">${fmtDateTime(ev.created_at)}</span><span>${statusBadge(ev.to_status)}</span><span class="u-muted">${h(ev.actor_name || '')}${ev.note ? ' — ' + h(ev.note) : ''}</span></div>`).join('')}</div>`
     : `<p class="u-muted" style="font-size:.84rem;margin:0">No events yet.</p>`}</div>`;
 }
 
@@ -2113,7 +2116,7 @@ async function renderClientOrder(el) {
     <section class="card" id="co-tlp" hidden aria-label="Timeline">
       <h2 class="co-h2">🧭 Timeline</h2>
       ${(o.timeline || []).length
-        ? `<ul style="margin:0;padding:0;list-style:none">${o.timeline.map(ev => `<li style="display:flex;gap:12px;padding:5px 0;font-size:.84rem"><time style="color:var(--text-muted);min-width:96px">${fmtDate(ev.at)}</time><span>${h(ev.label)}</span></li>`).join('')}</ul>`
+        ? `<ul style="margin:0;padding:0;list-style:none">${o.timeline.map(ev => `<li style="display:flex;gap:12px;padding:5px 0;font-size:.84rem"><time style="color:var(--text-muted);min-width:150px">${fmtDateTime(ev.at)}</time><span>${h(ev.label)}</span></li>`).join('')}</ul>`
         : `<div class="u-muted" style="font-size:.84rem">No updates yet.</div>`}
     </section>
 
@@ -3962,6 +3965,9 @@ function orderQueueActions(o) {
     case 'IN_SHIPMENT':
       btns.push(`<button class="btn btn-secondary btn-sm" ${dataAct('navigate', 'delivery')}>→ Delivery</button>`);
       break;
+    case 'CLOSED':
+      if (APP.user?.role === 'super_admin') btns.push(`<button class="btn btn-warning btn-sm" ${dataAct('reopenOrderModal', o.id)}>↩ Reopen</button>`);
+      break;
   }
   return `<div style="display:flex;gap:4px;flex-wrap:wrap">${btns.join('')}</div>`;
 }
@@ -4101,9 +4107,29 @@ async function dispatchRemainingModal(orderId) {
 async function preCloseOrder(orderId) {
   openModal('Pre-Close Order',
     `<p>Pre-closing <b>${orderId}</b> will mark it as <b>CLOSED</b> without completing all deliveries.</p>
-     <p style="color:var(--warning);margin-top:8px;font-size:.87rem">⚠️ Any remaining scheduled DCs will be left undelivered. This action cannot be undone.</p>`,
+     <p style="color:var(--warning);margin-top:8px;font-size:.87rem">⚠️ Any remaining scheduled DCs will be left undelivered. Only a super admin can reopen it afterwards.</p>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
      <button class="btn btn-danger" ${dataAct('confirmPreClose', orderId)}>Pre-Close Order</button>`);
+}
+
+// Reopen a CLOSED order — super-admin only (backend also enforces this). Moves it
+// back to PARTIALLY_CLOSED so the outstanding balance can be dispatched/replenished.
+function reopenOrderModal(orderId) {
+  openModal('Reopen Order',
+    `<p class="u-muted" style="margin-bottom:10px">Reopen <b>${h(orderId)}</b> back to <b>Partially Closed</b> so its outstanding deliveries can be dispatched or replenished. This is a super-admin corrective action and is recorded on the order timeline.</p>
+     <label style="display:block;font-weight:600;font-size:.84rem;margin-bottom:5px">Reason <span style="color:var(--danger)">*</span></label>
+     <textarea id="reopen-reason" rows="3" placeholder="e.g. Closed prematurely on billing while units were still due" style="width:100%;padding:9px 11px;border:1.5px solid var(--border);border-radius:8px;font-size:.86rem;resize:vertical;box-sizing:border-box"></textarea>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-warning" ${dataAct('confirmReopenOrder', orderId)}>↩ Reopen Order</button>`);
+}
+
+async function confirmReopenOrder(orderId) {
+  const reason = (document.getElementById('reopen-reason')?.value || '').trim();
+  if (!reason) { showToast('Enter a reason to reopen', 'error'); return; }
+  const res = await api(`/orders/${orderId}/reopen`, { method:'POST', body: JSON.stringify({ reason }) });
+  closeModal();
+  if (res && !res.error) { showToast(`Order ${orderId} reopened to Partially Closed`); afterOrderAction(orderId, 'orders'); }
+  else if (res && res.error) showToast(res.error, 'error');
 }
 
 async function confirmPreClose(orderId) {

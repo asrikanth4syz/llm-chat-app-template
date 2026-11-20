@@ -7141,6 +7141,7 @@ export default {
       if (path.match(/^\/api\/orders\/[^/]+\/amend-reject$/)  && method==="POST") return handleRejectAmendment(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/amendments$/)    && method==="GET")  return handleListAmendments(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/transition$/)   && method==="POST") return handleTransitionOrder(request,env,path);
+      if (path.match(/^\/api\/orders\/[^/]+\/reopen$/)       && method==="POST") return handleReopenOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/index$/)        && method==="POST") return handleSetOrderIndex(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/pick$/)         && method==="POST") return handlePickOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/pick-draft$/)   && method==="POST") return handleSavePickDraft(request,env,path);
@@ -11277,11 +11278,18 @@ async function handleBillDC(request: Request, env: Env, path: string): Promise<R
   await env.DB.prepare("UPDATE delivery_challans SET billed=1,billed_at=datetime('now') WHERE id=?").bind(id).run();
   const dc = await env.DB.prepare("SELECT order_id FROM delivery_challans WHERE id=?").bind(id).first() as Record<string,string>|null;
   if (dc?.order_id) {
-    await env.DB.prepare("UPDATE orders SET status='CLOSED',closed_at=datetime('now'),updated_at=datetime('now') WHERE id=? AND status IN ('IN_SHIPMENT','PARTIALLY_CLOSED')").bind(dc.order_id).run();
-    // Gap 9: release any remaining reservations
-    const {results:items} = await env.DB.prepare("SELECT * FROM order_items WHERE order_id=?").bind(dc.order_id).all();
-    for (const item of items as Record<string,unknown>[]) {
-      await env.DB.prepare("UPDATE inventory SET reserved=MAX(0,reserved-?) WHERE sku=?").bind(item.qty, item.sku).run();
+    // Billing a challan must NOT force-close an order that still has units due. Only
+    // close — with a timeline event — once every line is fully settled. (Previously
+    // this blind UPDATE closed the order on the first billed DC with no history row,
+    // leaving orders CLOSED while deliveries were still outstanding and invisible in
+    // the timeline.)
+    const closed = await closeOrderIfSettled(env, dc.order_id, user, `All deliveries settled — closed on billing of DC ${id}`);
+    if (closed) {
+      // Gap 9: release any remaining reservations once the order is fully closed.
+      const {results:items} = await env.DB.prepare("SELECT * FROM order_items WHERE order_id=?").bind(dc.order_id).all();
+      for (const item of items as Record<string,unknown>[]) {
+        await env.DB.prepare("UPDATE inventory SET reserved=MAX(0,reserved-?) WHERE sku=?").bind(item.qty, item.sku).run();
+      }
     }
   }
   await audit(env, user, "BILL", "delivery_challan", id);
@@ -11327,6 +11335,33 @@ async function closeOrderIfSettled(env: Env, orderId: string, user: {sub:string;
   await env.DB.prepare("INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)")
     .bind(uid(), orderId, cur.status||null, "CLOSED", user?.sub||"system", user?.name||"system", note).run().catch(()=>{});
   return true;
+}
+
+// POST /api/orders/:id/reopen — SUPER-ADMIN ONLY. Reopen a CLOSED order (e.g. one
+// closed prematurely while deliveries were still due) back to PARTIALLY_CLOSED so the
+// outstanding balance can be dispatched/replenished. A written reason is required and
+// the reopen is recorded on the timeline + audit log. closed_at is cleared.
+async function handleReopenOrder(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== "super_admin") return json({ error: "Only a super admin can reopen a closed order." }, 403);
+  const id = path.split("/").slice(-2)[0];
+  const order = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).first() as Record<string, unknown> | null;
+  if (!order) return json({ error: "Not found" }, 404);
+  if (String(order.status) !== "CLOSED") return json({ error: `Only a CLOSED order can be reopened — this one is ${String(order.status).toLowerCase().replace(/_/g, " ")}.`, code: "E_NOT_CLOSED" }, 409);
+  const body = await request.json().catch(() => ({})) as { reason?: string };
+  const reason = String(body.reason || "").trim().slice(0, 200);
+  if (!reason) return json({ error: "A reason is required to reopen an order." }, 400);
+  // Atomic compare-and-swap so a double-click can't double-apply.
+  const swap = await env.DB.prepare("UPDATE orders SET status='PARTIALLY_CLOSED',closed_at=NULL,updated_at=datetime('now') WHERE id=? AND status='CLOSED'").bind(id).run();
+  if (!swap.meta || swap.meta.changes === 0) {
+    const cur = await env.DB.prepare("SELECT status FROM orders WHERE id=?").bind(id).first() as { status?: string } | null;
+    return json({ id, status: cur?.status || "", deduped: true });
+  }
+  await env.DB.prepare("INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)")
+    .bind(uid(), id, "CLOSED", "PARTIALLY_CLOSED", user!.sub, user!.name, `Reopened by super admin — ${reason}`).run();
+  await audit(env, user, "REOPEN", "order", id, "CLOSED", `PARTIALLY_CLOSED: ${reason}`);
+  return json({ id, status: "PARTIALLY_CLOSED" });
 }
 
 // Driver-facing delivery confirmation. An exact delivery (every line delivered as
