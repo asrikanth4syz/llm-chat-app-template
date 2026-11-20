@@ -7862,8 +7862,11 @@ async function handleClientOrderView(request: Request, env: Env, path: string): 
   }
   const lines = (items as Record<string, unknown>[]).map(it => {
     const ordered = Number(it.qty) || 0;
-    const delivered = Math.min(ordered, deliveredBySku[it.sku as string] || 0);
-    return { name: it.name, ordered, delivered, due: Math.max(0, ordered - delivered) };
+    // Show the ACTUAL delivered quantity (may exceed ordered on an over-delivery),
+    // not a figure capped at ordered. "due" is still floored at 0, and the surplus
+    // is surfaced separately as `over`.
+    const raw = deliveredBySku[it.sku as string] || 0;
+    return { name: it.name, ordered, delivered: raw, due: Math.max(0, ordered - raw), over: Math.max(0, raw - ordered) };
   });
 
   // Client-safe timeline: map a few internal statuses to plain labels, drop the rest,

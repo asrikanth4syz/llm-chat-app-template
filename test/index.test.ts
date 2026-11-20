@@ -6083,7 +6083,7 @@ describe("GET /api/orders/:id/client-view", () => {
     expect(body.cancelled).toBe(false);
     expect(Array.isArray(body.items)).toBe(true);
     const item = (body.items as Array<Record<string, unknown>>)[0];
-    expect(Object.keys(item).sort()).toEqual(["delivered", "due", "name", "ordered"]);
+    expect(Object.keys(item).sort()).toEqual(["delivered", "due", "name", "ordered", "over"]);
     // …and nothing internal leaks, anywhere in the payload.
     const raw = JSON.stringify(body);
     for (const leak of ["PICKED", "READY_TO_PICK", "Warehouse Picker 7", "GRN-5521", "INTERNAL", "picker_name", "unit_price", "cost", "margin", "bin A3"]) {

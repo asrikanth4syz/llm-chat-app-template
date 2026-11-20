@@ -49,9 +49,10 @@ function oqDeliveryBadge(o) {
 function oqQtyBreakdown(o) {
   const d = Number(o.delivered_qty) || 0, t = Number(o.total_qty) || 0;
   if (d <= 0) return '';
-  const delivered = Math.min(d, t), due = Math.max(0, t - delivered);
+  // Show the ACTUAL delivered qty (not capped at ordered); flag any over-delivery.
+  const due = Math.max(0, t - d), over = Math.max(0, d - t);
   return `<div style="margin-top:2px;font-size:.68rem;color:var(--text-muted);line-height:1.4">
-    <span style="color:#0C8E6D;font-weight:700">${delivered.toLocaleString('en-IN')}</span> delivered${due>0?` · <span style="color:#B5731A;font-weight:700">${due.toLocaleString('en-IN')}</span> due`:''}
+    <span style="color:#0C8E6D;font-weight:700">${d.toLocaleString('en-IN')}</span> delivered${due>0?` · <span style="color:#B5731A;font-weight:700">${due.toLocaleString('en-IN')}</span> due`:''}${over>0?` · <span style="color:var(--danger);font-weight:700">+${over.toLocaleString('en-IN')} over</span>`:''}
   </div>`;
 }
 
@@ -769,7 +770,9 @@ async function viewOrder(id) {
   // Once an order has been dispatched, show DELIVERED (what the client received)
   // instead of PICKED (what the warehouse pulled).
   const deliveredMap = {};
-  (drill?.lines || []).forEach(l => { deliveredMap[l.sku] = { delivered: l.qty_delivered||0, due: l.qty_due||0 }; });
+  // Store the ACTUAL delivered qty (capped + any over-delivery) plus the surplus, so
+  // the per-line table shows what was really delivered, not a figure capped at ordered.
+  (drill?.lines || []).forEach(l => { deliveredMap[l.sku] = { delivered: (l.qty_delivered||0) + (l.qty_over_delivered||0), due: l.qty_due||0, over: l.qty_over_delivered||0 }; });
   // Show the Ordered/Delivered/Due reconciliation whenever ANY delivery has actually
   // been recorded — never gate it on order.status, which can lag behind the challans
   // (a part-delivered order can still sit at READY_TO_PICK/PICKED until recomputed).
@@ -779,7 +782,7 @@ async function viewOrder(id) {
   // Fulfilment totals for the progress meter (from the delivery breakdown).
   const dLines = drill?.lines || [];
   const orderedUnits   = dLines.length ? dLines.reduce((s,l)=>s+(l.qty_ordered||0),0) : (order.items||[]).reduce((s,i)=>s+(i.qty||0),0);
-  const deliveredUnits = dLines.reduce((s,l)=>s+(l.qty_delivered||0),0);
+  const deliveredUnits = dLines.reduce((s,l)=>s+(l.qty_delivered||0)+(l.qty_over_delivered||0),0); // actual, incl. over
   const dueUnits       = dLines.reduce((s,l)=>s+(l.qty_due||0),0);
   // Delivered can never exceed ordered — cap the meter at 100%. A raw sum above
   // ordered means a duplicate/phantom challan was counted; surface it, don't hide it.
@@ -810,7 +813,7 @@ async function viewOrder(id) {
   const ordItems = dLines.length;
   const ordQty   = dLines.reduce((s,l)=>s+(Number(l.qty_ordered)||0),0) || orderedUnits;
   const delItems = itFull;                                              // count of FULL items
-  const delQty   = dLines.reduce((s,l)=>s+(Number(l.qty_delivered)||0),0);
+  const delQty   = dLines.reduce((s,l)=>s+(Number(l.qty_delivered)||0)+(Number(l.qty_over_delivered)||0),0); // actual, incl. over
   const dueItems = itPartial + itPending;
   const dueQty   = dLines.reduce((s,l)=>s+Math.max(0,(Number(l.qty_ordered)||0)-(Number(l.qty_delivered)||0)),0);
   const rpct = (n,d) => d>0 ? Math.round(n/d*100) : 0;                  // guard /0
@@ -841,7 +844,7 @@ async function viewOrder(id) {
       <div style="font-size:1.2rem;font-weight:800;color:${color};font-variant-numeric:tabular-nums;line-height:1.2">${nfIn(items)} <span style="color:var(--text-muted);font-weight:600">/</span> ${nfIn(qty)}</div>
       <div style="font-size:.58rem;color:var(--text-muted);margin-top:2px;text-transform:uppercase;letter-spacing:.04em">items / qty</div>
       ${def!=null ? `
-        <div title="${def}" style="margin-top:7px;font-size:.7rem;font-weight:600;color:var(--text-muted);cursor:help;border-bottom:1px dotted var(--border);display:inline-block">${pItems}% items · ${pQty}% qty</div>
+        <div title="${def}" style="margin-top:7px;font-size:.7rem;font-weight:600;color:var(--text-muted);cursor:help;border-bottom:1px dotted var(--border);display:inline-block">${Math.min(100,pItems)}% items · ${Math.min(100,pQty)}% qty</div>
         <div style="height:5px;background:#e5e7eb;border-radius:3px;overflow:hidden;margin-top:5px"><i style="display:block;height:100%;width:${Math.min(100,barPct)}%;background:${barColor}"></i></div>` : ''}
     </div>`;
   const legendChip = (key, color, label, count) => `
@@ -909,14 +912,15 @@ async function viewOrder(id) {
   const itemsTableRows = (order.items||[]).map(i => {
     const noteHtml = i.item_note ? `<div style="font-size:.72rem;color:var(--amber-text);background:var(--amber-bg);border:1px solid var(--gold-border);border-radius:5px;padding:2px 8px;margin-top:3px;display:inline-block">💬 ${h(i.item_note)}</div>` : '';
     if (qtyMode === 'delivered') {
-      const d = deliveredMap[i.sku] || { delivered: 0, due: Math.max(0, i.qty) };
+      const d = deliveredMap[i.sku] || { delivered: 0, due: Math.max(0, i.qty), over: 0 };
       const short = d.due > 0;
+      const over = d.over || 0;
       // Same full/partial/pending rule as the reconciliation card, for legend filtering.
       const rstat = (d.delivered||0) <= 0 ? 'pending' : ((d.delivered||0) < (Number(i.qty)||0) ? 'partial' : 'full');
       return `<tr data-recon="${rstat}">
         <td>${h(i.name)}${noteHtml}${delayCell(i)}</td>
         <td class="u-muted">${i.qty}</td>
-        <td><b style="color:${short?'var(--warning)':'var(--success)'}">${d.delivered}</b>${short?` <span style="font-size:.75rem;color:var(--warning)">(due ${d.due})</span>`:''}</td>
+        <td><b style="color:${over>0?'var(--danger)':short?'var(--warning)':'var(--success)'}">${d.delivered}</b>${short?` <span style="font-size:.75rem;color:var(--warning)">(due ${d.due})</span>`:''}${over>0?` <span style="font-size:.75rem;color:var(--danger)">(+${over} over)</span>`:''}</td>
         <td>${fmt(i.unit_price)}</td>
         <td>${fmt(i.total)}</td>
       </tr>`;
@@ -1191,9 +1195,10 @@ function injectOrderFullCss() {
 // amber due; no red (red is reserved for overdue elsewhere).
 function ofReconCardHtml(r) {
   const n = v => Number(v||0).toLocaleString('en-IN');
+  const over = Math.max(0, Number(r.delQty || 0) - Number(r.ordQty || 0));
   return `<div class="rc" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:center">
     <div><div style="font-size:.7rem;font-weight:700;color:var(--text-muted)">ORDERED</div><div style="font-weight:800;font-variant-numeric:tabular-nums">${r.ordItems} / ${n(r.ordQty)}</div><small style="color:var(--text-muted)">items / qty</small></div>
-    <div><div style="font-size:.7rem;font-weight:700;color:var(--success)">DELIVERED</div><div style="font-weight:800;color:var(--success);font-variant-numeric:tabular-nums">${r.delItems} / ${n(r.delQty)}</div><small style="color:var(--text-muted)">${r.pctDelItems}% items · ${r.pctDelQty}% qty</small></div>
+    <div><div style="font-size:.7rem;font-weight:700;color:var(--success)">DELIVERED</div><div style="font-weight:800;color:var(--success);font-variant-numeric:tabular-nums">${r.delItems} / ${n(r.delQty)}</div><small style="color:var(--text-muted)">${Math.min(100,r.pctDelItems)}% items · ${Math.min(100,r.pctDelQty)}% qty${over>0?` · <span style="color:var(--danger);font-weight:700">+${n(over)} over</span>`:''}</small></div>
     <div><div style="font-size:.7rem;font-weight:700;color:#B5731A">DUE</div><div style="font-weight:800;color:#B5731A;font-variant-numeric:tabular-nums">${r.dueItems} / ${n(r.dueQty)}</div><small style="color:var(--text-muted)">${r.pctDueItems}% items · ${r.pctDueQty}% qty</small></div>
   </div>
   <div class="ofmini" role="img" aria-label="${r.pctDelQty}% delivered by quantity"><i style="width:${Math.min(100,r.pctDelQty)}%"></i></div>`;
@@ -1222,7 +1227,8 @@ function ofPrimaryAction(order, orderDCs) {
 // Build the delivered/due map + reconciliation + line rows shared by page & drawer.
 function ofComputeLines(order, drill) {
   const deliveredMap = {};
-  (drill?.lines || []).forEach(l => { deliveredMap[l.sku] = { delivered: Number(l.qty_delivered) || 0 }; });
+  // Actual delivered (capped + any over-delivery), plus the surplus for the flag.
+  (drill?.lines || []).forEach(l => { deliveredMap[l.sku] = { delivered: (Number(l.qty_delivered) || 0) + (Number(l.qty_over_delivered) || 0), over: Number(l.qty_over_delivered) || 0 }; });
   const reconLines = (order.items || []).map(i => ({
     ordered: Number(i.qty) || 0,
     delivered: Number((deliveredMap[i.sku] || {}).delivered) || 0,
@@ -1373,13 +1379,14 @@ function ofTotals(order) {
 }
 function ofReconBoxesHtml(r) {
   const n = v => Number(v || 0).toLocaleString('en-IN');
+  const over = Math.max(0, Number(r.delQty || 0) - Number(r.ordQty || 0));
   const box = (label, val, color, view) => `<button type="button" ${dataAct('ofGoTab', 'delivery', view)} aria-label="${label} — open the Delivery tab"
     style="border:1px solid var(--border);background:var(--bg,var(--surface-2));border-radius:12px;padding:12px 14px;text-align:left;cursor:pointer;width:100%">
     <span style="font-size:.72rem;font-weight:700;color:${color}">${label}</span><div style="font-size:1.25rem;font-weight:800;color:${color};font-variant-numeric:tabular-nums">${val}</div></button>`;
   return `<div style="display:flex;gap:14px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
-    <span style="font-size:2rem;font-weight:800;color:#0C8E6D">${r.pctDelQty}%</span>
+    <span style="font-size:2rem;font-weight:800;color:#0C8E6D">${Math.min(100, r.pctDelQty)}%</span>
     <div style="flex:1;min-width:140px"><div style="height:10px;background:var(--bg,var(--surface-2));border:1px solid var(--border);border-radius:5px;overflow:hidden"><i style="display:block;height:100%;width:${Math.min(100, r.pctDelQty)}%;background:#0C8E6D"></i></div>
-    <div class="u-muted" style="margin-top:4px"><b>${n(r.delQty)} of ${n(r.ordQty)}</b> units</div></div></div>
+    <div class="u-muted" style="margin-top:4px"><b>${n(r.delQty)} of ${n(r.ordQty)}</b> units${over > 0 ? ` · <span style="color:var(--danger);font-weight:700">${n(over)} over-delivered</span>` : ''}</div></div></div>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
       ${box('ORDERED', r.ordItems + ' / ' + n(r.ordQty), 'var(--navy)', 'item')}
       ${box('DELIVERED', r.delItems + ' / ' + n(r.delQty), '#0C8E6D', 'item')}
@@ -1441,9 +1448,10 @@ function ofTabOverview() {
 }
 function ofTabDelivery() {
   const c = APP._ofCtx, r = c.recon, view = c.view || 'item';
-  const header = `<div class="card"><div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"><span style="font-size:2rem;font-weight:800;color:#0C8E6D">${r.pctDelQty}%</span>
+  const ofOver = Math.max(0, Number(r.delQty || 0) - Number(r.ordQty || 0));
+  const header = `<div class="card"><div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"><span style="font-size:2rem;font-weight:800;color:#0C8E6D">${Math.min(100, r.pctDelQty)}%</span>
     <div style="flex:1;min-width:160px"><div style="height:10px;background:var(--bg,var(--surface-2));border:1px solid var(--border);border-radius:5px;overflow:hidden"><i style="display:block;height:100%;width:${Math.min(100, r.pctDelQty)}%;background:#0C8E6D"></i></div>
-    <div class="u-muted" style="margin-top:4px"><b>${r.delQty.toLocaleString('en-IN')} of ${r.ordQty.toLocaleString('en-IN')}</b> units · ${r.delItems} of ${r.ordItems} items</div></div></div>
+    <div class="u-muted" style="margin-top:4px"><b>${r.delQty.toLocaleString('en-IN')} of ${r.ordQty.toLocaleString('en-IN')}</b> units · ${r.delItems} of ${r.ordItems} items${ofOver > 0 ? ` · <span style="color:var(--danger);font-weight:700">${ofOver.toLocaleString('en-IN')} over-delivered</span>` : ''}</div></div></div>
     <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">
       <button type="button" ${dataAct('ofGoTab', 'delivery', 'item')} aria-pressed="${view === 'item'}" style="border:1px solid ${view === 'item' ? 'var(--navy)' : 'var(--border)'};background:${view === 'item' ? 'var(--navy)' : 'var(--surface)'};color:${view === 'item' ? '#fff' : 'var(--text)'};border-radius:999px;padding:5px 13px;font-weight:600;font-size:.82rem;cursor:pointer">By item</button>
       <button type="button" ${dataAct('ofGoTab', 'delivery', 'due')} aria-pressed="${view === 'due'}" style="border:1px solid ${view === 'due' ? 'var(--navy)' : 'var(--border)'};background:${view === 'due' ? 'var(--navy)' : 'var(--surface)'};color:${view === 'due' ? '#fff' : 'var(--text)'};border-radius:999px;padding:5px 13px;font-weight:600;font-size:.82rem;cursor:pointer">Due list (${c.dueLines.length})</button>
@@ -2015,8 +2023,9 @@ async function renderClientOrder(el) {
     return;
   }
 
-  const lines = (o.items || []).map(i => ({ name: i.name, ordered: Number(i.ordered) || 0, delivered: Number(i.delivered) || 0, due: Number(i.due) || 0 }));
+  const lines = (o.items || []).map(i => ({ name: i.name, ordered: Number(i.ordered) || 0, delivered: Number(i.delivered) || 0, due: Number(i.due) || 0, over: Number(i.over) || Math.max(0, (Number(i.delivered) || 0) - (Number(i.ordered) || 0)) }));
   const recon = window.oreconTotals(lines);
+  const overQty = Math.max(0, recon.delQty - recon.ordQty);
   let cFull = 0, cPart = 0, cPend = 0;
   lines.forEach(l => { const s = window.olineStatus(l.ordered, l.delivered); if (s === 'full') cFull++; else if (s === 'partial') cPart++; else cPend++; });
 
@@ -2139,7 +2148,7 @@ async function renderClientOrder(el) {
 
     <section class="card" aria-label="Delivery summary">
       <div class="co-recon-head"><h2 class="co-h2" style="margin:0">📦 Delivery summary</h2>
-        <span class="u-muted" style="font-size:.8rem">${recon.delQty.toLocaleString('en-IN')} of ${recon.ordQty.toLocaleString('en-IN')} units received</span></div>
+        <span class="u-muted" style="font-size:.8rem">${recon.delQty.toLocaleString('en-IN')} of ${recon.ordQty.toLocaleString('en-IN')} units received${overQty > 0 ? ` · <span style="color:var(--danger);font-weight:700">${overQty.toLocaleString('en-IN')} over-delivered</span>` : ''}</span></div>
       <div class="cocols">
         <div class="cocol"><div class="cocol-k">ORDERED</div><div class="cocol-v">${recon.ordItems} / ${recon.ordQty.toLocaleString('en-IN')}</div><div class="cocol-s">items / qty</div></div>
         <div class="cocol"><div class="cocol-k" style="color:var(--success)">DELIVERED</div><div class="cocol-v" style="color:var(--success)">${recon.delItems} / ${recon.delQty.toLocaleString('en-IN')}</div><div class="cocol-s"><b>${recon.pctDelItems}%</b> items · <b>${recon.pctDelQty}%</b> qty</div><div class="cocol-bar"><i style="width:${Math.min(100, recon.pctDelQty)}%;background:var(--success)"></i></div></div>
@@ -2182,8 +2191,11 @@ function coRenderItems() {
   if (!body) return;
   const rows = lines.filter(l => flt === 'all' || window.olineStatus(l.ordered, l.delivered) === flt).map(l => {
     const s = window.olineStatus(l.ordered, l.delivered);
-    const c = LB[s][1], lbl = LB[s][0];
-    return `<tr><td>${h(l.name)}</td><td class="n">${l.ordered.toLocaleString('en-IN')}</td><td class="n">${l.delivered.toLocaleString('en-IN')}</td><td class="n">${l.due.toLocaleString('en-IN')}</td><td><b style="color:${c}">${lbl}</b></td></tr>`;
+    const over = Number(l.over) || 0;
+    const c = over > 0 ? 'var(--danger)' : LB[s][1];
+    const lbl = over > 0 ? 'Over-delivered' : LB[s][0];
+    const delCell = `${l.delivered.toLocaleString('en-IN')}${over > 0 ? ` <span style="color:var(--danger);font-weight:700">(+${over.toLocaleString('en-IN')})</span>` : ''}`;
+    return `<tr><td>${h(l.name)}</td><td class="n">${l.ordered.toLocaleString('en-IN')}</td><td class="n">${delCell}</td><td class="n">${l.due.toLocaleString('en-IN')}</td><td><b style="color:${c}">${lbl}</b></td></tr>`;
   }).join('');
   body.innerHTML = rows || `<tr><td colspan="5" class="u-muted" style="padding:14px">No items in this status.</td></tr>`;
 }
@@ -2789,10 +2801,12 @@ function renderDDByItem() {
       ? via.map(v=>`<div style="white-space:nowrap"><b style="color:var(--navy)">${h(v.dc)}</b> · ${v.qty} · <span style="color:var(--text-muted)">${v.date?fmtDate(v.date):'—'}</span></div>`).join('')
       : '<span style="color:var(--text-muted)">—</span>';
     const sc = ddStatusColor(l.status);
+    const over = Number(l.qty_over_delivered) || 0;
+    const actualDel = (Number(l.qty_delivered) || 0) + over;   // actual delivered incl. over
     return `<tr>
       <td><b>${h(l.name||l.sku)}</b><div class="u-subtiny" style="font-family:monospace">${h(l.sku)}</div></td>
       <td class="u-right">${l.qty_ordered}</td>
-      <td style="text-align:right;color:${l.qty_delivered>0?'#10b981':'var(--text-muted)'};font-weight:${l.qty_delivered>0?700:400}">${l.qty_delivered}</td>
+      <td style="text-align:right;color:${over>0?'var(--danger)':actualDel>0?'#10b981':'var(--text-muted)'};font-weight:${actualDel>0?700:400}">${actualDel}${over>0?` <span style="font-size:.72rem;color:var(--danger)">(+${over})</span>`:''}</td>
       <td style="text-align:right;color:${l.qty_due>0?'var(--red)':'var(--text-muted)'};font-weight:${l.qty_due>0?700:400}">${l.qty_due}</td>
       <td class="u-right">${fmt(l.unit_price)}</td>
       <td class="u-right">${fmt(l.value_ordered)}</td>
