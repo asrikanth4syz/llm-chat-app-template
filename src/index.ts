@@ -9102,7 +9102,13 @@ async function smartPastePool(env: Env, clientId: string): Promise<Array<{ sku: 
     const listOnly = `SELECT cc.sku AS sku, i.name AS name, i.unit_price AS price
        FROM client_catalog cc JOIN inventory i ON i.sku = cc.sku
       WHERE cc.client_id = ? AND i.active = 1`;
-    return ((await env.DB.prepare(listOnly).bind(clientId).all()).results || []) as Array<{ sku: string; name: string; price: number | null }>;
+    try {
+      return ((await env.DB.prepare(listOnly).bind(clientId).all()).results || []) as Array<{ sku: string; name: string; price: number | null }>;
+    } catch (e) {
+      // Never let a catalogue-pool read crash the parser — degrade to "no matches".
+      console.error("smartPastePool failed:", String(e));
+      return [];
+    }
   }
 }
 
@@ -9147,21 +9153,28 @@ async function handleParsePaste(request: Request, env: Env): Promise<Response> {
   const poolRows = await smartPastePool(env, clientId);
 
   // History (last 365d, fulfilment-track statuses): order frequency + latest qty.
+  // Optional weighting only — a history read must never crash the parse.
   const ph = SMART_PASTE_HISTORY_STATUSES.map(() => "?").join(",");
-  const histRows = ((await env.DB.prepare(
-    `SELECT oi.sku AS sku, COUNT(DISTINCT o.id) AS n
-       FROM orders o JOIN order_items oi ON oi.order_id = o.id
-      WHERE o.client_id = ? AND o.created_at >= date('now','-365 day') AND o.status IN (${ph})
-      GROUP BY oi.sku`
-  ).bind(clientId, ...SMART_PASTE_HISTORY_STATUSES).all()).results || []) as Array<{ sku: string; n: number }>;
+  let histRows: Array<{ sku: string; n: number }> = [];
+  try {
+    histRows = ((await env.DB.prepare(
+      `SELECT oi.sku AS sku, COUNT(DISTINCT o.id) AS n
+         FROM orders o JOIN order_items oi ON oi.order_id = o.id
+        WHERE o.client_id = ? AND o.created_at >= date('now','-365 day') AND o.status IN (${ph})
+        GROUP BY oi.sku`
+    ).bind(clientId, ...SMART_PASTE_HISTORY_STATUSES).all()).results || []) as Array<{ sku: string; n: number }>;
+  } catch (e) { console.error("smart paste history (freq) failed:", String(e)); }
   const histMap = new Map(histRows.map(h => [h.sku, Number(h.n)]));
 
-  const qtyRows = ((await env.DB.prepare(
-    `SELECT oi.sku AS sku, oi.qty AS qty
-       FROM orders o JOIN order_items oi ON oi.order_id = o.id
-      WHERE o.client_id = ? AND o.created_at >= date('now','-365 day') AND o.status IN (${ph})
-      ORDER BY o.created_at DESC`
-  ).bind(clientId, ...SMART_PASTE_HISTORY_STATUSES).all()).results || []) as Array<{ sku: string; qty: number }>;
+  let qtyRows: Array<{ sku: string; qty: number }> = [];
+  try {
+    qtyRows = ((await env.DB.prepare(
+      `SELECT oi.sku AS sku, oi.qty AS qty
+         FROM orders o JOIN order_items oi ON oi.order_id = o.id
+        WHERE o.client_id = ? AND o.created_at >= date('now','-365 day') AND o.status IN (${ph})
+        ORDER BY o.created_at DESC`
+    ).bind(clientId, ...SMART_PASTE_HISTORY_STATUSES).all()).results || []) as Array<{ sku: string; qty: number }>;
+  } catch (e) { console.error("smart paste history (qty) failed:", String(e)); }
   const lastQty = new Map<string, number>();
   for (const r of qtyRows) if (!lastQty.has(r.sku)) lastQty.set(r.sku, Number(r.qty));
 
@@ -9238,7 +9251,12 @@ async function handleParsePaste(request: Request, env: Env): Promise<Response> {
     };
   });
 
-  if (logStmts.length) await env.DB.batch(logStmts);
+  // The parse-phase log is analytics only — chunk it (a 200-line paste would blow
+  // D1's per-batch statement limit) and never let a logging failure 500 the parse.
+  for (let i = 0; i < logStmts.length; i += 50) {
+    try { await env.DB.batch(logStmts.slice(i, i + 50)); }
+    catch (e) { console.error("paste parse-log batch failed:", String(e)); }
+  }
   return json({ client_id: clientId, parse_session_id: parseSessionId, lines, summary });
 }
 
