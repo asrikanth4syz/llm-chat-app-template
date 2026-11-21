@@ -1556,7 +1556,10 @@ function statusBadge(s) {
     HIGH:'danger', MEDIUM:'warning', LOW:'success',
   };
   const cls = map[s] || 'primary';
-  return `<span class="badge badge-${cls}">${s.replace(/_/g,' ')}</span>`;
+  // Display-label overrides (internal status codes are unchanged — workflow untouched).
+  // PARTIALLY_CLOSED is an OPEN order with deliveries still due, so label it clearly.
+  const LABELS = { PARTIALLY_CLOSED: 'Open – Partially Delivered' };
+  return `<span class="badge badge-${cls}">${LABELS[s] || s.replace(/_/g,' ')}</span>`;
 }
 
 function orderTypeBadge(t) {

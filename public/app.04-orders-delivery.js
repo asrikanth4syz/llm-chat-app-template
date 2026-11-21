@@ -3330,6 +3330,7 @@ async function renderOrderQueue(el) {
   if (!APP._oqMonth) APP._oqMonth = '';          // '' = all months
   if (!APP._oqItemView) APP._oqItemView = 'brand';
   if (APP._oqMinimised === undefined) { try { APP._oqMinimised = localStorage.getItem('oq_min') === '1'; } catch (_) { APP._oqMinimised = false; } }
+  if (!APP._oqSortKey) { APP._oqSortKey = 'created'; APP._oqSortDir = 'desc'; } // default: newest first
   APP._oqOrders = orders;
   APP._consolOrders = orders; oqConsolReset();
 
@@ -3422,16 +3423,10 @@ async function renderOrderQueue(el) {
     else if (tab.startsWith('phase:')) { const ph = ORDER_PHASES.find(p => p.key === tab.slice(6)); filtered = ph ? fOrders.filter(o => ph.statuses.includes(o.status)) : fOrders; }
     else filtered = fOrders.filter(o=>o.status===tab);
     if (APP._oqBucket) filtered = filtered.filter(o => oqBucketMatch(o, APP._oqBucket));
-    const byCreated = (a,b)=>new Date(b.created_at)-new Date(a.created_at);
-    const sorted = APP._oqSort === 'index'
-      ? [...filtered].sort((a,b)=>{
-          const ai = a.index_seq && a.index_month, bi = b.index_seq && b.index_month;
-          if (ai && !bi) return -1; if (!ai && bi) return 1;      // indexed first
-          if (!ai && !bi) return byCreated(a,b);
-          if (a.index_month !== b.index_month) return a.index_month < b.index_month ? 1 : -1; // newest month first
-          return (a.client_name||'').localeCompare(b.client_name||'') || (a.index_seq||0)-(b.index_seq||0);
-        })
-      : [...filtered].sort(byCreated);
+    // Sort by whichever header the user picked (all columns sortable), honouring dir.
+    const sKey = APP._oqSortKey || 'created';
+    const sDir = APP._oqSortDir === 'asc' ? 1 : -1;
+    const sorted = [...filtered].sort((a, b) => sDir * oqSortCmp(a, b, sKey));
     return `<tbody id="oq-tbody">${sorted.map(o=>{
       const isUrgent = o.status==='PENDING_APPROVAL';
       const todayStr = new Date().toISOString().slice(0,10);
@@ -3529,7 +3524,7 @@ function oqOrdersTableHtml() {
       </div>
       <div class="table-wrap">
         <table class="table table-cards table-cards-2up" style="margin:0">
-          <thead><tr><th>Order ID</th><th ${dataAct('oqToggleIndexSort')} id="oq-idx-th" style="cursor:pointer;white-space:nowrap" title="Sort by monthly index">Monthly index <span id="oq-idx-arrow" style="opacity:${APP._oqSort==='index'?'1':'.45'}">${APP._oqSort==='index'?'▼':'⇅'}</span></th><th>Client</th><th>Amount</th><th>Status</th><th>Delivery progress</th><th>Type</th><th class="u-center">Items</th><th class="u-center">Total Qty</th><th>Created</th><th>Actions</th></tr></thead>
+          <thead><tr>${oqTh('id','Order ID')}${oqTh('index','Monthly index')}${oqTh('client','Client')}${oqTh('amount','Amount')}${oqTh('status','Status')}${oqTh('progress','Delivery progress')}${oqTh('type','Type')}${oqTh('items','Items','u-center')}${oqTh('qty','Total Qty','u-center')}${oqTh('created','Created')}<th>Actions</th></tr></thead>
           ${APP._oqTableHtml ? APP._oqTableHtml(APP._oqStatusTab) : ''}
         </table>
       </div>
@@ -4203,13 +4198,44 @@ function oqIndexCanSet() { return ['super_admin', 'ops_admin'].includes(APP.user
 // Approved-or-later orders that somehow have no monthly index (back-fill candidates).
 const OQ_PRE_INDEX = ['DRAFT', 'CANCELLED', 'REJECTED', 'PENDING_PRICING', 'SUBMITTED', 'PENDING_APPROVAL'];
 function oqNeedsIndex(o) { return !o.index_seq && !OQ_PRE_INDEX.includes(o.status); }
-function oqToggleIndexSort() {
-  APP._oqSort = APP._oqSort === 'index' ? 'created' : 'index';
-  const ar = document.getElementById('oq-idx-arrow');
-  if (ar) { ar.textContent = APP._oqSort === 'index' ? '▼' : '⇅'; ar.style.opacity = APP._oqSort === 'index' ? '1' : '.45'; }
-  const tbody = document.getElementById('oq-tbody');
-  if (tbody && APP._oqTableHtml) tbody.outerHTML = APP._oqTableHtml(APP._oqStatusTab || 'All');
+// Every Order Queue column is sortable. Comparator returns ascending order; the
+// caller applies the direction. oqDeliv() gives the delivery-progress %.
+function oqSortCmp(a, b, key) {
+  switch (key) {
+    case 'id':       return String(a.id || '').localeCompare(String(b.id || ''));
+    case 'client':   return String(a.client_name || '').localeCompare(String(b.client_name || ''));
+    case 'amount':   return (Number(a.grand_total) || 0) - (Number(b.grand_total) || 0);
+    case 'status':   return String(a.status || '').localeCompare(String(b.status || ''));
+    case 'progress': return oqDeliv(a).pct - oqDeliv(b).pct;
+    case 'type':     return String(a.order_type || 'Regular').localeCompare(String(b.order_type || 'Regular'));
+    case 'items':    return (Number(a.item_count) || 0) - (Number(b.item_count) || 0);
+    case 'qty':      return (Number(a.total_qty) || 0) - (Number(b.total_qty) || 0);
+    case 'created':  return new Date(a.created_at || 0) - new Date(b.created_at || 0);
+    case 'index': {
+      const ai = a.index_seq && a.index_month, bi = b.index_seq && b.index_month;
+      if (ai && !bi) return -1; if (!ai && bi) return 1;               // indexed first
+      if (!ai && !bi) return new Date(a.created_at || 0) - new Date(b.created_at || 0);
+      if (a.index_month !== b.index_month) return a.index_month < b.index_month ? -1 : 1;
+      return (Number(a.index_seq) || 0) - (Number(b.index_seq) || 0) || (a.client_name || '').localeCompare(b.client_name || '');
+    }
+    default:         return new Date(a.created_at || 0) - new Date(b.created_at || 0);
+  }
 }
+// A sortable <th>: shows the active column's direction arrow, ⇅ otherwise.
+function oqTh(key, label, cls) {
+  const on = (APP._oqSortKey || 'created') === key;
+  const arrow = on ? (APP._oqSortDir === 'asc' ? '▲' : '▼') : '⇅';
+  return `<th ${cls ? `class="${cls}" ` : ''}${dataAct('oqSortBy', key)} aria-sort="${on ? (APP._oqSortDir === 'asc' ? 'ascending' : 'descending') : 'none'}" style="cursor:pointer;white-space:nowrap;user-select:none" title="Sort by ${label}">${label} <span style="opacity:${on ? '1' : '.4'};font-size:.85em">${arrow}</span></th>`;
+}
+// Click a header: toggle direction on the active column, else switch column with a
+// sensible default direction (numbers/dates high→low, text A→Z). Re-renders the table.
+function oqSortBy(key) {
+  if ((APP._oqSortKey || 'created') === key) APP._oqSortDir = APP._oqSortDir === 'asc' ? 'desc' : 'asc';
+  else { APP._oqSortKey = key; APP._oqSortDir = ['amount', 'qty', 'items', 'progress', 'created', 'index'].includes(key) ? 'desc' : 'asc'; }
+  const host = document.getElementById('oq-main-content');
+  if (host && typeof oqOrdersTableHtml === 'function') host.innerHTML = oqOrdersTableHtml();
+}
+function oqToggleIndexSort() { oqSortBy('index'); }
 function oqToggleNeedsIndex() {
   APP._oqIdxFilter = APP._oqIdxFilter === 'needs' ? null : 'needs';
   const btn = document.getElementById('oq-needs-idx');
