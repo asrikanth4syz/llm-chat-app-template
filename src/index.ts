@@ -9191,15 +9191,22 @@ async function handleParsePaste(request: Request, env: Env): Promise<Response> {
   const aliasByNorm = new Map<string, Map<string, number>>();
   if (learnEnabled) {
     const norms = [...new Set(parsed.map(p => normNameForMatch(p.product_text)).filter(Boolean))];
-    if (norms.length) {
-      const inPh = norms.map(() => "?").join(",");
-      const aliasRows = ((await env.DB.prepare(
-        `SELECT alias_norm, sku, hits FROM paste_alias WHERE client_id=? AND alias_norm IN (${inPh})`
-      ).bind(clientId, ...norms).all()).results || []) as Array<{ alias_norm: string; sku: string; hits: number }>;
-      for (const a of aliasRows) {
-        if (!aliasByNorm.has(a.alias_norm)) aliasByNorm.set(a.alias_norm, new Map());
-        aliasByNorm.get(a.alias_norm)!.set(a.sku, Number(a.hits));
-      }
+    // Chunk the IN(...) list: D1 caps bound parameters per statement (~100). A large
+    // paste has roughly one norm per line, so a single IN(...) over every line would
+    // blow that limit and 500 the whole parse. Alias learning is also optional, so a
+    // lookup failure degrades to "no learned boost" instead of crashing.
+    for (let i = 0; i < norms.length; i += 80) {
+      const chunk = norms.slice(i, i + 80);
+      const inPh = chunk.map(() => "?").join(",");
+      try {
+        const aliasRows = ((await env.DB.prepare(
+          `SELECT alias_norm, sku, hits FROM paste_alias WHERE client_id=? AND alias_norm IN (${inPh})`
+        ).bind(clientId, ...chunk).all()).results || []) as Array<{ alias_norm: string; sku: string; hits: number }>;
+        for (const a of aliasRows) {
+          if (!aliasByNorm.has(a.alias_norm)) aliasByNorm.set(a.alias_norm, new Map());
+          aliasByNorm.get(a.alias_norm)!.set(a.sku, Number(a.hits));
+        }
+      } catch (e) { console.error("paste alias lookup failed:", String(e)); }
     }
   }
 
