@@ -1985,8 +1985,141 @@ function coChallansHtml(o) {
   </section>`;
 }
 
+// ---- Client Order View v2 — tabbed layout ----------------------------------
+// Presentation-only redesign. Data still comes from /orders/:id/client-view;
+// the lifecycle, status mapping, challans, tickets, reorder and amendment
+// handlers are unchanged. Tabs: Delivery Breakdown (primary) · Deliveries ·
+// Timeline · Summary. Delivery Breakdown has By item / By challan / Due list,
+// the app's own names (Ordered · Delivered · Due · Over-delivered) and the
+// "Delivered via (challan · qty · date)" detail derived from the challans.
+let _co2CssDone = false;
+function injectCO2Css() {
+  if (_co2CssDone) return; _co2CssDone = true;
+  const css = `
+  .co2{max-width:1040px;margin:0 auto}
+  .co2 > *{margin-top:12px}.co2 > :first-child{margin-top:0}
+  .co2 .co-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .co2 .co-ref{font-weight:800;color:var(--navy);font-size:1.05rem}
+  .co2 .co-chip{display:inline-flex;align-items:center;border-radius:999px;padding:3px 11px;font-size:.73rem;font-weight:700;border:1px solid currentColor;white-space:nowrap}
+  .co2 .co-sp{flex:1}
+  .co2 .co-meta{font-size:.82rem;color:var(--text);font-weight:700;margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .co2 .cbig{font-size:1.4rem;font-weight:800;color:var(--navy)}
+  .co2 .csen{color:var(--text-muted);font-size:.86rem;margin-top:2px}
+  .co2 .cnext{font-size:.82rem;margin-top:10px}
+  .co2 .cseg{display:flex;height:12px;border-radius:7px;overflow:hidden;background:var(--surface-2);margin-top:6px}
+  .co2 .cseg i{display:block;height:100%}
+  .co2 .cleg{display:flex;gap:14px;margin-top:7px;font-size:.72rem;color:var(--text-muted);flex-wrap:wrap}
+  .co2 .cleg span{display:inline-flex;gap:5px;align-items:center}
+  .co2 .cleg b{color:var(--text)}
+  .co2 .cdot{width:10px;height:10px;border-radius:3px;display:inline-block}
+  .co2 .ctrail{display:flex;gap:4px;margin-top:14px;flex-wrap:wrap}
+  .co2 .cstep{flex:1;min-width:110px;border-top:3px solid var(--border);padding-top:7px;font-size:.76rem;color:var(--text-muted)}
+  .co2 .cstep.done{border-color:var(--success);color:var(--success)}
+  .co2 .cstep.cur{border-color:var(--warning);color:var(--navy);font-weight:700}
+  .co2 .cstep small{display:block;color:var(--text-muted);font-weight:400;margin-top:1px}
+  .co2 .ctabs{display:flex;gap:4px;border-bottom:1px solid var(--border);overflow-x:auto}
+  .co2 .ctab{border:0;background:none;font:inherit;font-weight:700;font-size:.88rem;color:var(--text-muted);padding:11px 13px;border-bottom:2px solid transparent;cursor:pointer;white-space:nowrap}
+  .co2 .ctab[aria-selected="true"]{color:var(--navy);border-color:var(--navy)}
+  .co2 .ctab .ct-c{font-size:.72rem;background:var(--surface-2);border-radius:999px;padding:1px 7px;margin-left:5px}
+  .co2 .cpane[hidden]{display:none}
+  .co2 .ctiles{display:grid;grid-template-columns:repeat(4,1fr);gap:11px}
+  .co2 .ctile{border:1px solid var(--border);border-radius:11px;padding:12px 13px;background:var(--surface)}
+  .co2 .ctile .k{font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted)}
+  .co2 .ctile .v{font-size:1.35rem;font-weight:800;margin:3px 0 1px}
+  .co2 .ctile .s{font-size:.72rem;color:var(--text-muted)}
+  .co2 .crecon{font-size:.82rem;color:var(--text-muted);line-height:1.5}.co2 .crecon b{color:var(--text)}
+  .co2 .csubs{display:inline-flex;background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:3px;gap:2px}
+  .co2 .csub{border:0;background:none;font:inherit;font-weight:700;font-size:.82rem;color:var(--text-muted);padding:7px 15px;border-radius:7px;cursor:pointer;white-space:nowrap}
+  .co2 .csub[aria-pressed="true"]{background:var(--surface);color:var(--navy);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+  .co2 .ccap{font-weight:700;font-size:.86rem;color:var(--navy)}
+  .co2 .cctrls{display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+  .co2 .cchips{display:flex;gap:7px;flex-wrap:wrap}
+  .co2 .cchip{border:1px solid var(--border);background:var(--surface);border-radius:999px;padding:6px 12px;font-weight:700;font-size:.78rem;cursor:pointer;color:var(--text)}
+  .co2 .cchip[aria-pressed="true"]{background:var(--navy);border-color:var(--navy);color:#fff}
+  .co2 .csearch{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--border);background:var(--surface);border-radius:8px;padding:2px 10px;min-width:150px}
+  .co2 .csearch input{border:0;background:none;color:var(--text);font:inherit;font-size:.82rem;padding:6px 0;flex:1;min-width:0;outline:none}
+  .co2 select.csort{border:1px solid var(--border);background:var(--surface);color:var(--text);border-radius:8px;font:inherit;font-size:.82rem;padding:7px 10px}
+  .co2 .cflex1{flex:1}
+  .co2 .ctblw{overflow-x:auto}
+  .co2 table.ctbl{width:100%;border-collapse:collapse}
+  .co2 table.ctbl th{background:var(--surface-2);color:var(--text-muted);font-size:.66rem;text-transform:uppercase;letter-spacing:.04em;font-weight:700;padding:9px 12px;border-bottom:1px solid var(--border);text-align:left}
+  .co2 table.ctbl th.n,.co2 table.ctbl td.n{text-align:right;font-variant-numeric:tabular-nums}
+  .co2 table.ctbl td{padding:10px 12px;border-bottom:1px solid var(--border);font-size:.85rem;vertical-align:top}
+  .co2 table.ctbl tbody tr:last-child td{border-bottom:0}
+  .co2 .cstat{display:inline-flex;align-items:center;font-size:.72rem;font-weight:700;padding:2px 9px;border-radius:999px;white-space:nowrap}
+  .co2 .cvia{font-size:.76rem;line-height:1.5}.co2 .cvia div{white-space:nowrap}.co2 .cvia b{color:var(--navy)}
+  .co2 .cdcbox{border:1px solid var(--border);border-radius:11px;margin-bottom:12px;overflow:hidden}
+  .co2 .cdchead{display:flex;justify-content:space-between;gap:8px;align-items:center;padding:10px 14px;background:var(--surface-2);flex-wrap:wrap}
+  .co2 .cdcnote{padding:12px 14px;font-size:.82rem;color:var(--text-muted)}
+  .co2 .cevs .cev{display:flex;gap:12px;padding:9px 0;border-bottom:1px solid var(--border);font-size:.85rem}
+  .co2 .cevs .cev:last-child{border-bottom:0}
+  .co2 .cevs time{color:var(--text-muted);min-width:150px;flex:none}
+  @media(max-width:700px){ .co2 .ctiles{grid-template-columns:1fr 1fr} }`;
+  const s = document.createElement('style'); s.textContent = css; document.head.appendChild(s);
+}
+
+function coBucket(l) { const o = Number(l.ordered) || 0, d = Number(l.delivered) || 0; return d > o ? 'over' : (d === o && o > 0) ? 'delivered' : 'due'; }
+function coRowStatus(l) {
+  const o = Number(l.ordered) || 0, d = Number(l.delivered) || 0;
+  if (d > o) return ['Over-delivered (+' + (d - o).toLocaleString('en-IN') + ')', '#7c3aed'];
+  if (d === o && o > 0) return ['Delivered', 'var(--success)'];
+  if (d > 0) return ['Partial', 'var(--warning)'];
+  return ['Not delivered', 'var(--text-muted)'];
+}
+// Per-item "Delivered via" derived from the order's challans: each delivered line
+// on a challan contributes {challan, qty, date}. Pending challans (0 delivered) drop out.
+function coBuildVia(o) {
+  const map = {};
+  (o.challans || []).forEach(dc => {
+    const date = dc.delivered_at || dc.dispatched_at || null;
+    (dc.items || []).forEach(it => {
+      const qd = Number(it.qty_delivered) || 0; if (qd <= 0) return;
+      (map[it.name] = map[it.name] || []).push({ dc: dc.dc_number, qty: qd, date });
+    });
+  });
+  return map;
+}
+function coStatusChip(headline) {
+  const label = headline.badge === 'Partially Delivered' ? 'Open – Partially Delivered' : headline.badge;
+  const color = headline.badge === 'Delivered' ? 'var(--success)'
+    : headline.badge === 'Partially Delivered' ? 'var(--warning)'
+    : (headline.badge === 'Out for delivery' || headline.badge === 'Dispatched') ? '#3b82f6'
+    : headline.badge === 'Cancelled' ? 'var(--danger)' : 'var(--text-muted)';
+  return { label, color };
+}
+// By challan: a reconciliation card per challan (Ordered vs Delivered per item).
+function coChallanReconHtml(o) {
+  const list = o.challans || [];
+  if (!list.length) return '<div class="u-muted" style="padding:16px">No deliveries raised for this order yet.</div>';
+  return list.map(dc => {
+    const [lbl, color] = coChallanTone(dc.status);
+    const date = dc.delivered_at ? fmtDate(dc.delivered_at) : dc.dispatched_at ? 'Dispatched ' + fmtDate(dc.dispatched_at) : '';
+    const delivered = dc.status === 'DELIVERED';
+    const body = delivered && (dc.items || []).length
+      ? `<div class="ctblw"><table class="ctbl"><thead><tr><th>Item</th><th class="n">Ordered</th><th class="n">Delivered</th></tr></thead><tbody>${dc.items.map(it =>
+          `<tr><td>${h(it.name)}</td><td class="n">${(Number(it.qty) || 0).toLocaleString('en-IN')}</td><td class="n" style="color:var(--success);font-weight:700">${(Number(it.qty_delivered) || 0).toLocaleString('en-IN')}</td></tr>`).join('')}</tbody></table></div>`
+      : `<div class="cdcnote">On the way — units are confirmed on delivery.</div>`;
+    return `<div class="cdcbox"><div class="cdchead">
+      <div><b style="color:var(--navy)">${h(String(dc.dc_number || 'Delivery'))}</b>
+        <span class="co-dc-badge" style="color:${color};border-color:${color};margin-left:6px">${h(lbl)}</span>
+        ${date ? `<span class="u-muted" style="margin-left:6px;font-size:.78rem">${h(date)}</span>` : ''}</div>
+      <div class="u-muted" style="font-size:.8rem"><b style="color:var(--navy)">${(Number(dc.delivered_units) || 0).toLocaleString('en-IN')}</b> units · ${dc.item_count} item${dc.item_count !== 1 ? 's' : ''}</div>
+    </div>${body}</div>`;
+  }).join('');
+}
+function coDueHtml(lines, dueQty) {
+  const list = lines.filter(l => (Number(l.delivered) || 0) < (Number(l.ordered) || 0))
+    .sort((a, b) => ((b.ordered - b.delivered)) - ((a.ordered - a.delivered)));
+  if (!list.length) return '<div class="u-muted" style="padding:20px;text-align:center;color:var(--success);font-weight:700">Nothing due — every ordered item is fully delivered.</div>';
+  return `<div class="ctblw"><table class="ctbl">
+    <thead><tr><th>Item still due</th><th class="n">Ordered</th><th class="n">Delivered</th><th class="n">Due</th></tr></thead>
+    <tbody>${list.map(l => `<tr><td><b>${h(l.name)}</b></td><td class="n">${(Number(l.ordered) || 0).toLocaleString('en-IN')}</td><td class="n" style="color:var(--success)">${(Number(l.delivered) || 0).toLocaleString('en-IN')}</td><td class="n" style="color:var(--warning);font-weight:800">${(Number(l.ordered) - Number(l.delivered)).toLocaleString('en-IN')}</td></tr>`).join('')}</tbody>
+    <tfoot><tr style="border-top:2px solid var(--border);font-weight:800"><td>Total due · ${list.length} item${list.length !== 1 ? 's' : ''}</td><td></td><td></td><td class="n" style="color:var(--warning)">${(Number(dueQty) || 0).toLocaleString('en-IN')}</td></tr></tfoot>
+  </table></div>`;
+}
+
 async function renderClientOrder(el) {
-  injectClientOrderCss();
+  injectClientOrderCss(); injectCO2Css();
   const id = APP._navTab || parseHash().tab || '';
   if (!id) { el.innerHTML = notImplemented('client_order'); return; }
   el.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading ${h(id)}…</p></div>`;
@@ -2002,8 +2135,7 @@ async function renderClientOrder(el) {
   }
   APP._coOrder = o;
 
-  // A draft is pre-submission — show a clear "continue editing / submit" landing
-  // rather than the delivery-tracking UI (which is meaningless before submission).
+  // A draft is pre-submission — show the continue-editing landing (unchanged).
   if (o.is_draft) {
     const dPeriod = o.order_period ? new Date(o.order_period + '-01').toLocaleDateString('en-IN', { month: 'short', year: 'numeric' }) : '';
     el.innerHTML = `
@@ -2025,73 +2157,48 @@ async function renderClientOrder(el) {
 
   const lines = (o.items || []).map(i => ({ name: i.name, ordered: Number(i.ordered) || 0, delivered: Number(i.delivered) || 0, due: Number(i.due) || 0, over: Number(i.over) || Math.max(0, (Number(i.delivered) || 0) - (Number(i.ordered) || 0)) }));
   const recon = window.oreconTotals(lines);
-  const overQty = Math.max(0, recon.delQty - recon.ordQty);
-  let cFull = 0, cPart = 0, cPend = 0;
-  lines.forEach(l => { const s = window.olineStatus(l.ordered, l.delivered); if (s === 'full') cFull++; else if (s === 'partial') cPart++; else cPend++; });
+  // Over-delivered total is the sum of per-line surplus (a line can be over while
+  // the order overall is still short), so the tile/legend/By-item all agree.
+  const overQty = lines.reduce((s, l) => s + Math.max(0, (Number(l.delivered) || 0) - (Number(l.ordered) || 0)), 0);
+  const received = Math.max(0, recon.delQty - overQty);
+  const nOver = lines.filter(l => l.delivered > l.ordered).length;
+  const via = coBuildVia(o);
 
-  // One dispatch signal from the real challans so the headline, the stepper and
-  // the Deliveries list all describe the same state (no "being prepared" while a
-  // challan is already out for delivery).
   const _chs = o.challans || [];
   const outForDelivery = _chs.some(c => c.status === 'IN_TRANSIT' || c.status === 'DISPATCHED');
   const scheduled = _chs.some(c => c.status === 'SCHEDULED');
+  const onWay = _chs.filter(c => c.status !== 'DELIVERED').length;
   const headline = window.clientHeadline({
     approved: o.approved, cancelled: o.cancelled, outForDelivery, scheduled,
     orderedQty: recon.ordQty, deliveredQty: recon.delQty,
     totalItems: recon.ordItems, fullItems: recon.delItems, dueItems: recon.dueItems, dueUnits: recon.dueQty,
   });
+  const chip = coStatusChip(headline);
   const submittedDate = o.created_at ? fmtDate(o.created_at) : '';
   const approvedDate = o.approved_at ? fmtDate(o.approved_at) : '';
   const deliveredDate = o.delivered_on ? fmtDate(o.delivered_on) : '';
   const steps = window.clientSteps({
     approved: o.approved, cancelled: o.cancelled, outForDelivery, scheduled,
-    orderedQty: recon.ordQty, deliveredQty: recon.delQty,
-    submittedDate, approvedDate, deliveredDate,
+    orderedQty: recon.ordQty, deliveredQty: recon.delQty, submittedDate, approvedDate, deliveredDate,
   });
-  const colorVar = CO_COLORVAR[headline.color] || 'var(--text-muted)';
-
-  // Estimated delivery line.
   const full = recon.ordQty > 0 && recon.delQty >= recon.ordQty;
   const estText = o.cancelled ? ''
     : full ? `Delivered${deliveredDate ? ' on ' + deliveredDate : ''}`
     : o.predicted_delivery_date ? fmtDate(o.predicted_delivery_date)
     : o.approved ? "We'll confirm the date shortly"
     : "We'll confirm the date after approval";
-
   const period = o.order_period ? new Date(o.order_period + '-01').toLocaleDateString('en-IN', { month: 'short', year: 'numeric' }) : '';
-  const reconBadgeColor = headline.badge === 'Delivered' ? 'var(--success)' : headline.badge === 'Partially Delivered' ? 'var(--warning)' : headline.badge === 'Out for delivery' ? '#3b82f6' : 'var(--text-muted)';
+  const ref = (o.order_reference && o.order_reference !== o.id) ? h(o.order_reference) : '';
 
-  // Ticket help card: list open tickets (don't encourage duplicates), else raise buttons.
-  const tickets = o.tickets || [];
-  const helpBody = tickets.length
-    ? `<div class="u-muted" style="margin:4px 0 10px">You already have ${tickets.length === 1 ? 'a support request' : 'support requests'} open for this order:</div>
-       <div style="display:grid;gap:8px;margin-bottom:10px">${tickets.map(t => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;background:var(--bg,var(--surface-2));border:1px solid var(--border);border-radius:8px;padding:9px 12px">
-         <div><button type="button" ${dataAct('viewTicketModal', t.id)} style="background:none;border:0;padding:0;color:var(--primary);font-weight:700;cursor:pointer">${h(t.id)}</button> <span class="u-muted" style="font-size:.82rem">${h(t.subject || '')}</span></div>
-         <span class="badge" style="font-size:.7rem">${h(t.status || 'OPEN')}</span></div>`).join('')}</div>
-       <div class="row" style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-secondary btn-sm" ${dataAct('clientOrderTicket', id, 'support')}>Contact support</button><button class="btn btn-secondary btn-sm" ${dataAct('reorderFromHistory', id)}>🔄 Reorder</button></div>`
-    : `<div class="u-muted" style="margin:4px 0 10px">Questions about a late or missing item? Your account team can check it.</div>
-       <div class="row" style="display:flex;gap:8px;flex-wrap:wrap">
-         <button class="btn btn-primary" ${dataAct('clientOrderTicket', id, 'support')}>Contact support</button>
-         <button class="btn btn-secondary" ${dataAct('clientOrderTicket', id, 'issue')}>Report an issue</button>
-         <button class="btn btn-secondary" ${dataAct('reorderFromHistory', id)}>🔄 Reorder</button>
-       </div>`;
+  const trailHtml = `<div class="ctrail">${steps.labels.map((lab, i) => {
+    const c = steps.states[i];
+    return `<div class="cstep ${c}">${h(lab)}<small>${h(steps.subs[i] || '')}</small></div>`;
+  }).join('')}</div>`;
 
-  // Delivery Breakdown: the full delivery drilldown (available once something ships).
-  const deliveryNotesBtn = recon.delQty > 0
-    ? `<button class="btn btn-secondary btn-sm" ${dataAct('viewOrderDrilldown', id)}>📊 Delivery Breakdown</button>`
-    : `<button class="btn btn-secondary btn-sm" disabled title="Available once your order ships">📊 Delivery Breakdown</button>`;
-
-  const stepperHtml = o.cancelled
-    ? `<div class="co-cancel">❌ This order was cancelled.</div>`
-    : `<div class="costepper">${steps.labels.map((lab, i) => {
-        const c = steps.states[i];
-        return `<div class="costep ${c}"><ic>${c === 'done' ? '✓' : (i + 1)}</ic><b>${lab}</b><small>${h(steps.subs[i] || '')}</small></div>`;
-      }).join('')}</div>`;
-
-  // A change our team made that is waiting for THIS client to approve.
+  // A change our team made that is waiting for THIS client to approve (unchanged).
   const isApprover = ['client_admin', 'client_approver'].includes(APP.user?.role || '');
   const amendReviewHtml = o.awaiting_amendment_approval ? `
-  <section class="card" style="margin-top:12px;border:1px solid var(--gold-border);background:var(--amber-bg)" aria-label="Changes awaiting your approval">
+  <section class="card" style="border:1px solid var(--gold-border);background:var(--amber-bg)" aria-label="Changes awaiting your approval">
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font-size:1.1rem">✏️</span>
       <h2 style="font-size:1rem;margin:0;color:var(--amber-text)">Changes awaiting your approval</h2></div>
     <div style="font-size:.86rem;margin:6px 0 10px;color:var(--amber-text)">Our team updated this order${o.amendment && o.amendment.reason ? ' — ' + h(o.amendment.reason) : ''}. Review the change, then approve to resume fulfilment or reject to keep the previous version.</div>
@@ -2104,101 +2211,167 @@ async function renderClientOrder(el) {
     </div>
   </section>` : '';
 
-  APP._coFilter = 'all';
-  el.innerHTML = `
-  <div class="co-wrap">
-    <div class="co-crumb"><button class="btn btn-secondary btn-sm" ${dataAct('clientBackToOrders')}>← Back to My Orders</button></div>
+  const tickets = o.tickets || [];
+  const openTicketsCard = tickets.length ? `<section class="card"><h2 class="co-h2">Support requests</h2>
+    <div class="u-muted" style="margin:4px 0 10px">You already have ${tickets.length === 1 ? 'a support request' : 'support requests'} open for this order:</div>
+    <div style="display:grid;gap:8px">${tickets.map(t => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:9px 12px">
+      <div><button type="button" ${dataAct('viewTicketModal', t.id)} style="background:none;border:0;padding:0;color:var(--primary);font-weight:700;cursor:pointer">${h(t.id)}</button> <span class="u-muted" style="font-size:.82rem">${h(t.subject || '')}</span></div>
+      <span class="badge" style="font-size:.7rem">${h(t.status || 'OPEN')}</span></div>`).join('')}</div>
+  </section>` : '';
 
-    <div class="co-head">
-      <div class="co-title">
-        <h1>Order ${h(o.id)}</h1>
-        <div class="co-sub">${h(o.order_type || 'Regular')} · Placed ${fmtDate(o.created_at)}${period ? ' · For ' + period : ''}${o.client_name ? ' · ' + h(o.client_name) : ''}${o.order_reference && o.order_reference !== o.id ? ' · Ref ' + h(o.order_reference) : ''}</div>
+  const recvPct = recon.ordQty > 0 ? Math.min(100, Math.round(received / recon.ordQty * 100)) : 0;
+  const overPct = recon.ordQty > 0 ? Math.min(100 - recvPct, Math.round(overQty / recon.ordQty * 100)) : 0;
+
+  const statusCard = o.cancelled
+    ? `<section class="card" style="border-left:4px solid var(--danger)"><div style="display:flex;align-items:center;gap:12px"><span style="font-size:1.6rem">❌</span><div><div style="font-size:1.15rem;font-weight:800;color:var(--danger)">Cancelled</div><div class="u-muted" style="font-size:.86rem">This order was cancelled.</div></div></div></section>`
+    : `<section class="card">
+        <div class="cbig">${recon.pctDelQty}% of units received</div>
+        <div class="csen">${recon.delItems} of ${recon.ordItems} items delivered · ${recon.dueItems} items (${recon.dueQty.toLocaleString('en-IN')} units) due</div>
+        ${estText ? `<div class="cnext"><span class="u-muted">Next delivery:</span> <b>${h(estText)}</b>${onWay ? ` <span class="u-muted">· ${onWay} ${onWay === 1 ? 'challan' : 'challans'} on the way</span>` : ''}</div>` : ''}
+        <div style="margin-top:10px">
+          <div class="cseg"><i style="width:${recvPct}%;background:var(--success)"></i><i style="width:${overPct}%;background:#3b82f6"></i></div>
+          <div class="cleg">
+            <span><i class="cdot" style="background:var(--success)"></i> Delivered against order <b>${received.toLocaleString('en-IN')}</b></span>
+            ${overQty > 0 ? `<span><i class="cdot" style="background:#3b82f6"></i> Over-delivered <b>${overQty.toLocaleString('en-IN')}</b></span>` : ''}
+            <span><i class="cdot" style="background:var(--surface-2);border:1px solid var(--border)"></i> Due <b>${recon.dueQty.toLocaleString('en-IN')}</b></span>
+          </div>
+        </div>
+        ${trailHtml}
+      </section>`;
+
+  APP._coFilter = 'all'; APP._coSearch = ''; APP._coSort = 'due';
+  APP._coTab = 'dt'; APP._coSub = 'item';
+  APP._coLines = lines; APP._coVia = via;
+
+  el.innerHTML = `
+  <div class="co2">
+    <div><button class="btn btn-secondary btn-sm" ${dataAct('clientBackToOrders')}>← Back to My Orders</button></div>
+
+    <section class="card" style="padding:14px 16px">
+      <div class="co-top">
+        <span class="co-ref">Order ${h(o.id)}</span>
+        <span class="co-chip" style="color:${chip.color}">${h(chip.label)}</span>
+        <span class="co-sp"></span>
+        <button class="btn btn-primary btn-sm" ${dataAct('reorderFromHistory', o.id)}>🔄 Reorder</button>
+        <button class="btn btn-secondary btn-sm" ${dataAct('clientOrderTicket', o.id, 'issue')}>Report an issue</button>
+        <button class="btn btn-secondary btn-sm" ${dataAct('clientOrderTicket', o.id, 'support')}>Contact support</button>
       </div>
-      <div class="co-head-actions">
-        <button class="btn btn-secondary btn-sm" id="co-tl-btn" aria-expanded="false" ${dataActEl('clientOrderToggleTimeline')}>🧭 Timeline</button>
-        ${deliveryNotesBtn}
-      </div>
-    </div>
+      <div class="co-meta">${h(o.order_type || 'Regular')} · Placed ${fmtDate(o.created_at)}${period ? ' · ' + period : ''}${o.client_name ? ' · ' + h(o.client_name) : ''}${ref ? ' · Ref ' + ref : ''}</div>
+    </section>
 
     ${amendReviewHtml}
 
-    <section class="card" id="co-tlp" hidden aria-label="Timeline">
-      <h2 class="co-h2">🧭 Timeline</h2>
-      ${(o.timeline || []).length
-        ? `<ul style="margin:0;padding:0;list-style:none">${o.timeline.map(ev => `<li style="display:flex;gap:12px;padding:5px 0;font-size:.84rem"><time style="color:var(--text-muted);min-width:150px">${fmtDateTime(ev.at)}</time><span>${h(ev.label)}</span></li>`).join('')}</ul>`
-        : `<div class="u-muted" style="font-size:.84rem">No updates yet.</div>`}
-    </section>
+    ${statusCard}
 
-    ${o.cancelled ? `<section class="card co-status co-status-cancel" style="--co-c:var(--danger)"><div class="co-status-main"><span class="co-status-ic">❌</span><div><div class="co-status-h" style="color:var(--danger)">Cancelled</div><div class="co-status-d">This order was cancelled.</div></div></div></section>` : `
-    <section class="card co-status" style="--co-c:${colorVar}" aria-live="polite">
-      <div class="co-status-main">
-        <span class="co-status-ic">${coStatusIcon(headline)}</span>
-        <div>
-          <div class="co-status-h" style="color:${colorVar}">${h(headline.status)}</div>
-          <div class="co-status-d">${h(headline.detail)}</div>
+    <div class="ctabs" role="tablist">
+      <button class="ctab" data-tab="dt" ${dataAct('coTab', 'dt')} aria-selected="true">Delivery Breakdown</button>
+      <button class="ctab" data-tab="dv" ${dataAct('coTab', 'dv')} aria-selected="false">Deliveries <span class="ct-c">${_chs.length}</span></button>
+      <button class="ctab" data-tab="tl" ${dataAct('coTab', 'tl')} aria-selected="false">Timeline</button>
+      <button class="ctab" data-tab="bd" ${dataAct('coTab', 'bd')} aria-selected="false">Summary</button>
+    </div>
+
+    <div class="cpane" id="co-pane-dt">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+        <div class="csubs">
+          <button class="csub" data-sub="item" ${dataAct('coSub', 'item')} aria-pressed="true">By item</button>
+          <button class="csub" data-sub="challan" ${dataAct('coSub', 'challan')} aria-pressed="false">By challan</button>
+          <button class="csub" data-sub="due" ${dataAct('coSub', 'due')} aria-pressed="false">Due list</button>
         </div>
+        <span class="ccap" id="co-dt-cap">Line-item reconciliation — by item</span>
       </div>
-      ${estText ? `<div class="co-status-eta"><span class="co-eta-k">📅 Estimated delivery</span><span class="co-eta-v">${h(estText)}</span></div>` : ''}
-    </section>`}
+      <section class="card" id="co-v-item" style="padding:14px 16px">
+        <div class="cctrls">
+          <div class="cchips" id="co-chips"></div>
+          <span class="cflex1"></span>
+          <label class="csearch" aria-label="Search items"><input type="text" placeholder="Search item…" ${dataInputVal('coSearchInput')}></label>
+          <select class="csort" ${dataChangeVal('coSortChange')}><option value="due">Due first</option><option value="az">A to Z</option></select>
+        </div>
+        <div class="ctblw"><table class="ctbl">
+          <thead><tr><th>Item</th><th class="n">Ordered</th><th class="n">Delivered</th><th class="n">Due</th><th>Delivered via (challan · qty · date)</th><th>Status</th></tr></thead>
+          <tbody id="co-rows"></tbody>
+        </table></div>
+      </section>
+      <section class="card" id="co-v-challan" style="padding:14px 16px" hidden>${coChallanReconHtml(o)}</section>
+      <section class="card" id="co-v-due" style="padding:14px 16px" hidden>${coDueHtml(lines, recon.dueQty)}</section>
+    </div>
 
-    <section class="card" aria-label="Order progress">
-      <h2 class="co-h2" style="margin:0 0 14px">Order progress</h2>
-      ${stepperHtml}
-    </section>
+    <div class="cpane" id="co-pane-dv" hidden>${coChallansHtml(o) || '<section class="card" style="padding:16px"><span class="u-muted">No deliveries have been raised for this order yet.</span></section>'}</div>
 
-    <section class="card" aria-label="Delivery summary">
-      <div class="co-recon-head"><h2 class="co-h2" style="margin:0">📦 Delivery summary</h2>
-        <span class="u-muted" style="font-size:.8rem">${recon.delQty.toLocaleString('en-IN')} of ${recon.ordQty.toLocaleString('en-IN')} units received${overQty > 0 ? ` · <span style="color:var(--danger);font-weight:700">${overQty.toLocaleString('en-IN')} over-delivered</span>` : ''}</span></div>
-      <div class="cocols">
-        <div class="cocol"><div class="cocol-k">ORDERED</div><div class="cocol-v">${recon.ordItems} / ${recon.ordQty.toLocaleString('en-IN')}</div><div class="cocol-s">items / qty</div></div>
-        <div class="cocol"><div class="cocol-k" style="color:var(--success)">DELIVERED</div><div class="cocol-v" style="color:var(--success)">${recon.delItems} / ${recon.delQty.toLocaleString('en-IN')}</div><div class="cocol-s"><b>${recon.pctDelItems}%</b> items · <b>${recon.pctDelQty}%</b> qty</div><div class="cocol-bar"><i style="width:${Math.min(100, recon.pctDelQty)}%;background:var(--success)"></i></div></div>
-        <div class="cocol"><div class="cocol-k" style="color:var(--warning)">DUE</div><div class="cocol-v" style="color:var(--warning)">${recon.dueItems} / ${recon.dueQty.toLocaleString('en-IN')}</div><div class="cocol-s"><b>${recon.pctDueItems}%</b> items · <b>${recon.pctDueQty}%</b> qty</div><div class="cocol-bar"><i style="width:${Math.min(100, recon.pctDueQty)}%;background:var(--warning)"></i></div></div>
+    <div class="cpane" id="co-pane-tl" hidden>
+      <section class="card" style="padding:15px 16px">
+        ${trailHtml}
+        <h2 class="co-h2" style="margin:16px 0 6px">Activity</h2>
+        <div class="cevs">${(o.timeline || []).length
+          ? o.timeline.map(ev => `<div class="cev"><time>${fmtDateTime(ev.at)}</time><span>${h(ev.label)}</span></div>`).join('')
+          : '<div class="u-muted" style="font-size:.84rem">No updates yet.</div>'}</div>
+      </section>
+    </div>
+
+    <div class="cpane" id="co-pane-bd" hidden>
+      <div class="ctiles">
+        <div class="ctile"><div class="k">Ordered</div><div class="v" style="color:var(--navy)">${recon.ordQty.toLocaleString('en-IN')}</div><div class="s">${recon.ordItems} items</div></div>
+        <div class="ctile"><div class="k">Delivered</div><div class="v" style="color:var(--success)">${recon.delQty.toLocaleString('en-IN')}</div><div class="s">${recon.pctDelQty}% · ${recon.delItems} items</div></div>
+        <div class="ctile"><div class="k">Due</div><div class="v" style="color:var(--warning)">${recon.dueQty.toLocaleString('en-IN')}</div><div class="s">${recon.pctDueQty}% · ${recon.dueItems} items</div></div>
+        <div class="ctile"><div class="k">Over-delivered</div><div class="v" style="color:#7c3aed">${overQty.toLocaleString('en-IN')}</div><div class="s">${nOver} item${nOver !== 1 ? 's' : ''}</div></div>
       </div>
-      <div class="coseg" id="co-seg"></div>
-      <div class="cotabs" id="co-tabs" role="group" aria-label="Filter items by status"></div>
-      <div class="cotw${lines.length > 20 ? ' scroll' : ''}"><table class="cotable">
-        <thead><tr><th>Item</th><th class="n">Ordered</th><th class="n">Delivered</th><th class="n">Due</th><th>Status</th></tr></thead>
-        <tbody id="co-rows"></tbody>
-      </table></div>
-    </section>
+      <section class="card crecon" style="padding:14px 16px;margin-top:12px">Delivered <b>${recon.delQty.toLocaleString('en-IN')}</b> = <b>${received.toLocaleString('en-IN')}</b> against your order${overQty > 0 ? ` + <b>${overQty.toLocaleString('en-IN')}</b> over-delivered` : ''}. Due = <b>${recon.ordQty.toLocaleString('en-IN')}</b> − <b>${received.toLocaleString('en-IN')}</b> = <b>${recon.dueQty.toLocaleString('en-IN')}</b>.</section>
+    </div>
 
-    ${coChallansHtml(o)}
-
-    <section class="card"><h2 class="co-h2">Need help?</h2>${helpBody}</section>
+    ${openTicketsCard}
   </div>`;
 
-  // Store what the table/chip renderer needs, then draw.
-  APP._coLines = lines;
-  APP._coCounts = { full: cFull, partial: cPart, pending: cPend, all: lines.length };
   coRenderItems();
   window.coRenderItems = coRenderItems;
-
   try { window.scrollTo(0, 0); } catch (_) {}
 }
 
-// Render the item table body + chips + segmented bar for the current filter.
+// Render the By-item table body + filter chips for the current filter/search/sort.
 function coRenderItems() {
-  const lines = APP._coLines || [], counts = APP._coCounts || { all: 0 }, flt = APP._coFilter || 'all';
-  const LB = { full: ['Fully delivered', 'var(--success)'], partial: ['Partly delivered', 'var(--warning)'], pending: ['Awaiting delivery', 'var(--text-muted)'] };
-  const seg = document.getElementById('co-seg');
-  if (seg) seg.innerHTML = ['full', 'partial', 'pending'].map(k => counts[k]
-    ? `<button data-cof="${k}" ${dataAct('clientOrderFilter', k)} style="width:${Math.round(counts[k] / (counts.all || 1) * 100)}%;background:${LB[k][1]}" aria-label="${LB[k][0]} ${counts[k]}"></button>` : '').join('');
-  const tabs = document.getElementById('co-tabs');
-  if (tabs) tabs.innerHTML = `<button class="cotab" ${dataAct('clientOrderFilter', 'all')} aria-pressed="${flt === 'all'}">All ${counts.all}</button>`
-    + ['full', 'partial', 'pending'].map(k => counts[k]
-      ? `<button class="cotab" ${dataAct('clientOrderFilter', k)} aria-pressed="${flt === k}"><span style="width:9px;height:9px;border-radius:50%;background:${LB[k][1]};display:inline-block"></span>${LB[k][0]} <b>${counts[k]}</b></button>` : '').join('');
+  const lines = APP._coLines || [], via = APP._coVia || {};
+  const flt = APP._coFilter || 'all', q = (APP._coSearch || '').toLowerCase(), sort = APP._coSort || 'due';
+  const counts = { all: lines.length, due: 0, delivered: 0, over: 0 };
+  lines.forEach(l => { counts[coBucket(l)]++; });
+  const chips = document.getElementById('co-chips');
+  if (chips) {
+    const defs = [['all', 'All'], ['due', 'Due'], ['delivered', 'Delivered'], ['over', 'Over-delivered']];
+    chips.innerHTML = defs.map(([k, lab]) => `<button class="cchip" ${dataAct('coSetFilter', k)} aria-pressed="${flt === k}">${lab} <span class="u-muted">${counts[k]}</span></button>`).join('');
+  }
+  let list = lines.filter(l => (flt === 'all' || coBucket(l) === flt) && (!q || String(l.name).toLowerCase().includes(q)));
+  if (sort === 'az') list = list.slice().sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  else { const rank = { due: 0, over: 1, delivered: 2 }; list = list.slice().sort((a, b) => rank[coBucket(a)] - rank[coBucket(b)] || (b.ordered - b.delivered) - (a.ordered - a.delivered) || String(a.name).localeCompare(String(b.name))); }
   const body = document.getElementById('co-rows');
   if (!body) return;
-  const rows = lines.filter(l => flt === 'all' || window.olineStatus(l.ordered, l.delivered) === flt).map(l => {
-    const s = window.olineStatus(l.ordered, l.delivered);
-    const over = Number(l.over) || 0;
-    const c = over > 0 ? 'var(--danger)' : LB[s][1];
-    const lbl = over > 0 ? 'Over-delivered' : LB[s][0];
-    const delCell = `${l.delivered.toLocaleString('en-IN')}${over > 0 ? ` <span style="color:var(--danger);font-weight:700">(+${over.toLocaleString('en-IN')})</span>` : ''}`;
-    return `<tr><td>${h(l.name)}</td><td class="n">${l.ordered.toLocaleString('en-IN')}</td><td class="n">${delCell}</td><td class="n">${l.due.toLocaleString('en-IN')}</td><td><b style="color:${c}">${lbl}</b></td></tr>`;
-  }).join('');
-  body.innerHTML = rows || `<tr><td colspan="5" class="u-muted" style="padding:14px">No items in this status.</td></tr>`;
+  body.innerHTML = list.length ? list.map(l => {
+    const [lbl, color] = coRowStatus(l);
+    const v = via[l.name] || [];
+    const viaH = v.length
+      ? '<div class="cvia">' + v.map(x => `<div><b>${h(String(x.dc))}</b> · ${(Number(x.qty) || 0).toLocaleString('en-IN')}${x.date ? ` · <span class="u-muted">${fmtDate(x.date)}</span>` : ''}</div>`).join('') + '</div>'
+      : '<span class="u-muted">—</span>';
+    const delColor = l.delivered > l.ordered ? '#7c3aed' : l.delivered > 0 ? 'var(--success)' : 'var(--text-muted)';
+    return `<tr><td><b>${h(l.name)}</b></td>
+      <td class="n">${l.ordered.toLocaleString('en-IN')}</td>
+      <td class="n" style="color:${delColor};font-weight:${l.delivered > 0 ? 700 : 400}">${l.delivered.toLocaleString('en-IN')}</td>
+      <td class="n" style="color:${l.due > 0 ? 'var(--warning)' : 'var(--text-muted)'};font-weight:${l.due > 0 ? 700 : 400}">${l.due.toLocaleString('en-IN')}</td>
+      <td>${viaH}</td>
+      <td><span class="cstat" style="color:${color};border:1px solid ${color}">${lbl}</span></td></tr>`;
+  }).join('') : `<tr><td colspan="6" class="u-muted" style="padding:16px;text-align:center">No items in this filter.</td></tr>`;
 }
+function coSetFilter(k) { APP._coFilter = (APP._coFilter === k && k !== 'all') ? 'all' : k; coRenderItems(); }
+function coSearchInput(v) { APP._coSearch = v || ''; coRenderItems(); }
+function coSortChange(v) { APP._coSort = v || 'due'; coRenderItems(); }
+function coTab(view) {
+  APP._coTab = view;
+  ['dt', 'dv', 'tl', 'bd'].forEach(x => { const p = document.getElementById('co-pane-' + x); if (p) p.hidden = x !== view; });
+  document.querySelectorAll('.co2 .ctab').forEach(b => b.setAttribute('aria-selected', b.getAttribute('data-tab') === view ? 'true' : 'false'));
+}
+function coSub(view) {
+  APP._coSub = view;
+  ['item', 'challan', 'due'].forEach(x => { const p = document.getElementById('co-v-' + x); if (p) p.hidden = x !== view; });
+  document.querySelectorAll('.co2 .csub').forEach(b => b.setAttribute('aria-pressed', b.getAttribute('data-sub') === view ? 'true' : 'false'));
+  const cap = document.getElementById('co-dt-cap');
+  if (cap) cap.textContent = view === 'item' ? 'Line-item reconciliation — by item' : view === 'challan' ? 'Reconciliation — by challan' : 'Items still due';
+}
+
 function clientOrderFilter(k) {
   APP._coFilter = (APP._coFilter === k && k !== 'all') ? 'all' : k;  // click active chip clears
   coRenderItems();
