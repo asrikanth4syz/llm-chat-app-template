@@ -1998,6 +1998,10 @@ function injectCO2Css() {
   const css = `
   .co2{max-width:1040px;margin:0 auto}
   .co2 > *{margin-top:12px}.co2 > :first-child{margin-top:0}
+  .co2 .card{padding:16px 18px}
+  .co2 section.card.cstripcard{padding:18px 20px}
+  .co2 .cstripcard .cseg{margin-top:4px}
+  .co2 .cstripcard .ctrail{margin-top:18px;padding-top:2px}
   .co2 .co-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   .co2 .co-ref{font-weight:800;color:var(--navy);font-size:1.05rem}
   .co2 .co-chip{display:inline-flex;align-items:center;border-radius:999px;padding:3px 11px;font-size:.73rem;font-weight:700;border:1px solid currentColor;white-space:nowrap}
@@ -2224,7 +2228,7 @@ async function renderClientOrder(el) {
 
   const statusCard = o.cancelled
     ? `<section class="card" style="border-left:4px solid var(--danger)"><div style="display:flex;align-items:center;gap:12px"><span style="font-size:1.6rem">❌</span><div><div style="font-size:1.15rem;font-weight:800;color:var(--danger)">Cancelled</div><div class="u-muted" style="font-size:.86rem">This order was cancelled.</div></div></div></section>`
-    : `<section class="card">
+    : `<section class="card cstripcard">
         <div class="cbig">${recon.pctDelQty}% of units received</div>
         <div class="csen">${recon.delItems} of ${recon.ordItems} items delivered · ${recon.dueItems} items (${recon.dueQty.toLocaleString('en-IN')} units) due</div>
         ${estText ? `<div class="cnext"><span class="u-muted">Next delivery:</span> <b>${h(estText)}</b>${onWay ? ` <span class="u-muted">· ${onWay} ${onWay === 1 ? 'challan' : 'challans'} on the way</span>` : ''}</div>` : ''}
