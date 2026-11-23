@@ -17,6 +17,7 @@ import {
 import type { ApprovalLeg } from "./quote_access";
 import { recurringOccurrences, istTodayISO, addDaysISO, type RecurrencePlan } from "./recurring";
 import { normName, normDc, clientNameMatches, reconcileDcImport, type OrderLine, type ZohoLine } from "./zoho_dc_import";
+import { accountLabel, clientDisplayLabel } from "./client_account";
 
 // ── JWT ──────────────────────────────────────────────────────────────
 async function signJWT(payload: object, secret: string): Promise<string> {
@@ -3516,6 +3517,9 @@ async function ensureFeatureTables(env: Env): Promise<void> {
     `CREATE INDEX IF NOT EXISTS idx_zdci_dc ON zoho_dc_items (zoho_dc_id);`,
     `CREATE TABLE IF NOT EXISTS dc_import_log ( id TEXT PRIMARY KEY, order_id TEXT NOT NULL, zoho_dc_id TEXT NOT NULL, dc_number TEXT, actor_id TEXT, actor_name TEXT, outcome TEXT NOT NULL, flags TEXT DEFAULT '[]', created_at TEXT DEFAULT (datetime('now')) );`,
     `CREATE INDEX IF NOT EXISTS idx_dcimportlog_order ON dc_import_log (order_id);`,
+    // Account / Location model: ship-to sites that belong to a client account.
+    `CREATE TABLE IF NOT EXISTS client_locations ( id TEXT PRIMARY KEY, client_id TEXT NOT NULL, display_name TEXT NOT NULL, shipping_address TEXT, contact_name TEXT, contact_phone TEXT, zoho_address_id TEXT, is_default INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, created_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE INDEX IF NOT EXISTS idx_client_locations_client ON client_locations (client_id);`,
   ];
   // Column adds for the receiving spine — idempotent (errors swallowed if present).
   const alters: string[] = [
@@ -3547,6 +3551,10 @@ async function ensureFeatureTables(env: Env): Promise<void> {
     // from (idempotency key + provenance). Partial-unique so many NULLs are allowed.
     `ALTER TABLE delivery_challans ADD COLUMN zoho_dc_id TEXT`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_dc_zoho ON delivery_challans(zoho_dc_id) WHERE zoho_dc_id IS NOT NULL`,
+    // Account model: a short display name, the Zoho legal name, and the Zoho contact link.
+    `ALTER TABLE clients ADD COLUMN display_name TEXT`,
+    `ALTER TABLE clients ADD COLUMN legal_name TEXT`,
+    `ALTER TABLE clients ADD COLUMN zoho_contact_id TEXT`,
   ];
   for (const sql of [...stmts, ...alters]) { try { await env.DB.prepare(sql).run(); } catch { /* exists / non-fatal */ } }
   // Seed the editable claim-screening dictionaries once (deterministic ids →
@@ -7284,6 +7292,10 @@ export default {
       if (path==="/api/clients"  && method==="POST") return handleAddClient(request,env);
       if (path.match(/^\/api\/clients\/[^/]+\/budget$/) && method==="GET") return handleClientBudget(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/catalog$/) && method==="GET")    return handleGetClientCatalog(request,env,path);
+      if (path.match(/^\/api\/clients\/[^/]+\/locations$/) && method==="GET")  return handleListClientLocations(request,env,path);
+      if (path.match(/^\/api\/clients\/[^/]+\/locations$/) && method==="POST") return handleAddClientLocation(request,env,path);
+      if (path.match(/^\/api\/clients\/[^/]+\/locations\/[^/]+$/) && method==="PATCH") return handlePatchClientLocation(request,env,path);
+      if (path.match(/^\/api\/clients\/[^/]+\/rename$/) && method==="POST") return handleRenameClient(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/catalog$/) && method==="POST")   return handleAddClientCatalogItems(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/assign-zoho-catalog$/) && method==="POST") return handleAssignZohoCatalog(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/catalog\/[^/]+$/) && method==="PATCH")  return handlePatchClientCatalogItem(request,env,path);
@@ -11480,7 +11492,7 @@ async function orderDeliveredBySku(env: Env, orderId: string): Promise<Record<st
 
 async function dcImportOrder(env: Env, orderId: string): Promise<Record<string, unknown> | null> {
   return env.DB.prepare(
-    "SELECT o.id, o.client_id, o.status, o.created_at, o.order_period, c.name AS client_name FROM orders o LEFT JOIN clients c ON o.client_id=c.id WHERE o.id=?"
+    "SELECT o.id, o.client_id, o.status, o.created_at, o.order_period, c.name AS client_name, c.display_name AS client_display_name, c.legal_name AS client_legal_name FROM orders o LEFT JOIN clients c ON o.client_id=c.id WHERE o.id=?"
   ).bind(orderId).first() as Promise<Record<string, unknown> | null>;
 }
 
@@ -11515,7 +11527,8 @@ async function handleZohoDcCandidates(request: Request, env: Env, path: string):
       detail_ready: Number(r.detail_ok) === 1,
       already_in_smartpantry: dcNumbers.has(normDc(r.dc_number)),
     }));
-  return json({ order_id: orderId, client_name: clientName, candidates });
+  const clientLabel = clientDisplayLabel({ name: order.client_name, display_name: order.client_display_name, legal_name: order.client_legal_name });
+  return json({ order_id: orderId, client_name: clientName, client_label: clientLabel, candidates });
 }
 
 // Build the reconciliation for one Zoho DC against the order (no writes).
@@ -12615,6 +12628,7 @@ async function handlePatchClient(request: Request, env: Env, path: string): Prom
   const fields: string[] = [];
   const vals: unknown[] = [];
   if (body.name               !== undefined) { fields.push("name=?");               vals.push(body.name||''); }
+  if (body.display_name       !== undefined) { fields.push("display_name=?");       vals.push(body.display_name||''); }
   if (body.contact_name       !== undefined) { fields.push("contact_name=?");       vals.push(body.contact_name||''); }
   if (body.contact_email      !== undefined) { fields.push("contact_email=?");      vals.push(body.contact_email||''); }
   if (body.monthly_budget     !== undefined) { fields.push("monthly_budget=?");     vals.push(body.monthly_budget); }
@@ -12640,6 +12654,122 @@ async function handlePatchClient(request: Request, env: Env, path: string): Prom
     await env.DB.prepare("UPDATE users SET org=? WHERE client_id=?").bind(body.name||'', id).run();
   }
   return json({id});
+}
+
+// ════════════════════════════════════════════════════════════════════
+// CLIENT ACCOUNT / LOCATIONS (P1) — a client (account) owns ship-to locations
+// ════════════════════════════════════════════════════════════════════
+let _clientLocReady = false;
+async function ensureClientLocationSchema(env: Env): Promise<void> {
+  if (_clientLocReady) return;
+  await env.DB.prepare("ALTER TABLE clients ADD COLUMN display_name TEXT").run().catch(() => {});
+  await env.DB.prepare("ALTER TABLE clients ADD COLUMN legal_name TEXT").run().catch(() => {});
+  await env.DB.prepare("ALTER TABLE clients ADD COLUMN zoho_contact_id TEXT").run().catch(() => {});
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS client_locations ( id TEXT PRIMARY KEY, client_id TEXT NOT NULL, display_name TEXT NOT NULL, shipping_address TEXT, contact_name TEXT, contact_phone TEXT, zoho_address_id TEXT, is_default INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, created_at TEXT DEFAULT (datetime('now')) )").run().catch(() => {});
+  await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_client_locations_client ON client_locations (client_id)").run().catch(() => {});
+  _clientLocReady = true;
+}
+
+// Non-destructive migration: seed a default ship-to location from the client's current
+// address the first time its locations are read, if it has none.
+async function ensureDefaultLocation(env: Env, client: Record<string, unknown>): Promise<void> {
+  const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM client_locations WHERE client_id=?").bind(String(client.id)).first() as { n?: number } | null;
+  if ((row?.n || 0) > 0) return;
+  await env.DB.prepare(
+    "INSERT INTO client_locations (id,client_id,display_name,shipping_address,contact_name,contact_phone,is_default,active) VALUES (?,?,?,?,?,?,1,1)"
+  ).bind(uid(), String(client.id), accountLabel(client) || String(client.name || "Main"), String(client.address || ""), String(client.contact_name || ""), String(client.contact_phone || "")).run().catch(() => {});
+}
+
+// GET /api/clients/:id/locations — the account + its ship-to locations (seeds a default).
+async function handleListClientLocations(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!CLIENT_ADMIN_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  await ensureClientLocationSchema(env);
+  const id = path.split("/").slice(-2)[0];
+  const client = await env.DB.prepare("SELECT id,name,display_name,legal_name,address,contact_name,contact_phone,gstin FROM clients WHERE id=?").bind(id).first() as Record<string, unknown> | null;
+  if (!client) return json({ error: "Client not found" }, 404);
+  await ensureDefaultLocation(env, client);
+  const { results } = await env.DB.prepare(
+    "SELECT id,display_name,shipping_address,contact_name,contact_phone,zoho_address_id,is_default,active FROM client_locations WHERE client_id=? ORDER BY is_default DESC, created_at ASC"
+  ).bind(id).all();
+  return json({
+    client_id: id, account_label: accountLabel(client),
+    name: client.name || null, display_name: client.display_name || null, legal_name: client.legal_name || null,
+    billing_address: client.address || null, gstin: client.gstin || null, locations: results,
+  });
+}
+
+// POST /api/clients/:id/locations — add a ship-to location.
+async function handleAddClientLocation(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!CLIENT_ADMIN_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  await ensureClientLocationSchema(env);
+  const id = path.split("/").slice(-2)[0];
+  const client = await env.DB.prepare("SELECT id FROM clients WHERE id=?").bind(id).first() as { id?: string } | null;
+  if (!client?.id) return json({ error: "Client not found" }, 404);
+  const body = await request.json().catch(() => ({})) as Record<string, unknown>;
+  const display = String(body.display_name || "").trim();
+  if (!display) return json({ error: "A display name is required." }, 400);
+  const existing = await env.DB.prepare("SELECT COUNT(*) AS n FROM client_locations WHERE client_id=?").bind(id).first() as { n?: number } | null;
+  const isDefault = (body.is_default === true || Number(body.is_default) === 1 || (existing?.n || 0) === 0) ? 1 : 0;
+  if (isDefault) await env.DB.prepare("UPDATE client_locations SET is_default=0 WHERE client_id=?").bind(id).run();
+  const locId = uid();
+  await env.DB.prepare(
+    "INSERT INTO client_locations (id,client_id,display_name,shipping_address,contact_name,contact_phone,zoho_address_id,is_default,active) VALUES (?,?,?,?,?,?,?,?,1)"
+  ).bind(locId, id, display, String(body.shipping_address || ""), String(body.contact_name || ""), String(body.contact_phone || ""), String(body.zoho_address_id || "") || null, isDefault).run();
+  await audit(env, user, "ADD_LOCATION", "client", id, undefined, display);
+  return json({ id: locId, is_default: isDefault }, 201);
+}
+
+// PATCH /api/clients/:id/locations/:locId — edit a location (name / address / default).
+async function handlePatchClientLocation(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!CLIENT_ADMIN_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  await ensureClientLocationSchema(env);
+  const parts = path.split("/"); // ['', 'api', 'clients', <id>, 'locations', <locId>]
+  const id = parts[3], locId = parts[5];
+  const loc = await env.DB.prepare("SELECT id FROM client_locations WHERE id=? AND client_id=?").bind(locId, id).first() as { id?: string } | null;
+  if (!loc?.id) return json({ error: "Location not found" }, 404);
+  const body = await request.json().catch(() => ({})) as Record<string, unknown>;
+  if (body.is_default === true || Number(body.is_default) === 1) {
+    await env.DB.prepare("UPDATE client_locations SET is_default=0 WHERE client_id=?").bind(id).run();
+    await env.DB.prepare("UPDATE client_locations SET is_default=1 WHERE id=?").bind(locId).run();
+  }
+  const fields: string[] = [], vals: unknown[] = [];
+  if (body.display_name !== undefined) { const d = String(body.display_name || "").trim(); if (!d) return json({ error: "Display name cannot be blank." }, 400); fields.push("display_name=?"); vals.push(d); }
+  if (body.shipping_address !== undefined) { fields.push("shipping_address=?"); vals.push(String(body.shipping_address || "")); }
+  if (body.contact_name !== undefined) { fields.push("contact_name=?"); vals.push(String(body.contact_name || "")); }
+  if (body.contact_phone !== undefined) { fields.push("contact_phone=?"); vals.push(String(body.contact_phone || "")); }
+  if (body.active !== undefined) { fields.push("active=?"); vals.push(body.active ? 1 : 0); }
+  if (fields.length) { vals.push(locId); await env.DB.prepare(`UPDATE client_locations SET ${fields.join(",")} WHERE id=?`).bind(...vals).run(); }
+  await audit(env, user, "EDIT_LOCATION", "client", id, undefined, locId);
+  return json({ id: locId });
+}
+
+// POST /api/clients/:id/rename — super admin; adopt a new (Zoho legal) name with an
+// audited reason. The previous name is preserved in legal_name (first rename only).
+async function handleRenameClient(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== "super_admin") return json({ error: "Only a super admin may rename a client." }, 403);
+  await ensureClientLocationSchema(env);
+  const id = path.split("/").slice(-2)[0];
+  const client = await env.DB.prepare("SELECT id,name,legal_name FROM clients WHERE id=?").bind(id).first() as Record<string, unknown> | null;
+  if (!client) return json({ error: "Client not found" }, 404);
+  const body = await request.json().catch(() => ({})) as { name?: string; reason?: string };
+  const newName = String(body.name || "").trim();
+  const reason = String(body.reason || "").trim().slice(0, 200);
+  if (!newName) return json({ error: "A new name is required." }, 400);
+  if (!reason) return json({ error: "A reason is required to rename a client." }, 400);
+  const old = String(client.name || "");
+  if (newName === old) return json({ id, name: old, unchanged: true });
+  await env.DB.prepare("UPDATE clients SET name=?, legal_name=COALESCE(NULLIF(legal_name,''), ?) WHERE id=?").bind(newName, old, id).run();
+  await env.DB.prepare("UPDATE users SET org=? WHERE client_id=?").bind(newName, id).run().catch(() => {});
+  await audit(env, user, "RENAME_CLIENT", "client", id, old, `${newName}: ${reason}`);
+  return json({ id, name: newName, previous: old });
 }
 
 // ════════════════════════════════════════════════════════════════════

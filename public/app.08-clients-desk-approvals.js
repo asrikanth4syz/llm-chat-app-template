@@ -234,6 +234,83 @@ async function confirmExecDelivery(dcId) {
 /* ============================================================
    CLIENTS
    ============================================================ */
+// ---- Client account: ship-to locations + rename (super admin / ops) ----------
+const _clSuper = () => APP.user?.role === 'super_admin';
+async function clientLocations(id) {
+  openModal('Locations', `<div class="loading-state"><div class="spinner"></div><p>Loading locations…</p></div>`, `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
+  const d = await api('/clients/' + id + '/locations').catch(() => null);
+  if (!d || d.error) { openModal('Locations', `<div class="u-muted">${h((d && d.error) || 'Could not load locations.')}</div>`, `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`); return; }
+  APP._clLoc = { id, data: d };
+  const rows = (d.locations || []).map(l => `<tr>
+    <td><input type="text" id="cl-nm-${l.id}" value="${h(l.display_name || '')}" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px"></td>
+    <td><input type="text" id="cl-ad-${l.id}" value="${h(l.shipping_address || '')}" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px"></td>
+    <td style="text-align:center"><input type="radio" name="cl-def" ${Number(l.is_default) === 1 ? 'checked' : ''} ${dataAct('clientLocDefault', id, l.id)}></td>
+    <td><button class="btn btn-secondary btn-sm" ${dataAct('clientLocSave', id, l.id)}>Save</button></td>
+  </tr>`).join('');
+  const body = `
+    <div style="background:var(--surface-2,#f5f8fb);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:12px">
+      <div style="font-weight:800;color:var(--navy)">${h(d.name || d.account_label || '')}</div>
+      <div style="font-size:.78rem;color:var(--text-muted);margin-top:3px">Billing (shared): ${h(d.billing_address || '—')}${d.gstin ? ' · GSTIN ' + h(d.gstin) : ''}</div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
+        <label style="font-size:.76rem;color:var(--text-muted)">Display name</label>
+        <input type="text" id="cl-display" value="${h(d.display_name || '')}" placeholder="${h(d.name || '')}" style="padding:6px 8px;border:1px solid var(--border);border-radius:6px">
+        <button class="btn btn-secondary btn-sm" ${dataAct('clientSaveDisplay', id)}>Save</button>
+        ${_clSuper() ? `<span style="flex:1"></span><button class="btn btn-sm" style="background:#fff7ed;color:#9a3412;border:1px solid #fed7aa" ${dataAct('clientRenameModal', id)}>✎ Rename (legal)</button>` : ''}
+      </div>
+    </div>
+    <div style="overflow-x:auto"><table class="table" style="font-size:.84rem;margin:0">
+      <thead><tr><th>Display name</th><th>Shipping address</th><th style="text-align:center">Default</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    <div style="border:1px dashed var(--border);border-radius:8px;padding:10px 12px;margin-top:12px">
+      <div style="font-weight:700;font-size:.82rem;margin-bottom:6px">Add location</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <input type="text" id="cl-new-nm" placeholder="Display name (e.g. Manyata EGL)" style="flex:1;min-width:150px;padding:7px 9px;border:1px solid var(--border);border-radius:6px">
+        <input type="text" id="cl-new-ad" placeholder="Shipping address" style="flex:2;min-width:180px;padding:7px 9px;border:1px solid var(--border);border-radius:6px">
+        <button class="btn btn-primary btn-sm" ${dataAct('clientLocAdd', id)}>Add</button>
+      </div>
+    </div>`;
+  openModal('Locations — ' + h(d.name || ''), body, `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
+}
+async function clientSaveDisplay(id) {
+  const v = (document.getElementById('cl-display') || {}).value || '';
+  const r = await api('/clients/' + id, { method: 'PATCH', body: JSON.stringify({ display_name: v }) }).catch(() => null);
+  showToast(r && !r.error ? 'Display name saved' : 'Save failed', r && !r.error ? 'success' : 'error');
+}
+async function clientLocSave(id, locId) {
+  const display_name = (document.getElementById('cl-nm-' + locId) || {}).value || '';
+  const shipping_address = (document.getElementById('cl-ad-' + locId) || {}).value || '';
+  const r = await api('/clients/' + id + '/locations/' + locId, { method: 'PATCH', body: JSON.stringify({ display_name, shipping_address }) }).catch(() => null);
+  showToast(r && !r.error ? 'Location saved' : (r && r.error) || 'Save failed', r && !r.error ? 'success' : 'error');
+}
+async function clientLocDefault(id, locId) {
+  const r = await api('/clients/' + id + '/locations/' + locId, { method: 'PATCH', body: JSON.stringify({ is_default: true }) }).catch(() => null);
+  if (r && !r.error) showToast('Default updated'); else { showToast('Failed', 'error'); clientLocations(id); }
+}
+async function clientLocAdd(id) {
+  const display_name = (document.getElementById('cl-new-nm') || {}).value || '';
+  const shipping_address = (document.getElementById('cl-new-ad') || {}).value || '';
+  if (!display_name.trim()) { showToast('Display name required', 'error'); return; }
+  const r = await api('/clients/' + id + '/locations', { method: 'POST', body: JSON.stringify({ display_name, shipping_address }) }).catch(() => null);
+  if (r && !r.error) { showToast('Location added'); clientLocations(id); } else showToast((r && r.error) || 'Add failed', 'error');
+}
+function clientRenameModal(id) {
+  openModal('Rename client (legal name)', `
+    <div class="u-muted" style="font-size:.82rem;margin-bottom:10px">Adopt the Zoho legal name. The previous name is preserved and the change is audited. The display name stays as-is.</div>
+    <div class="form-group"><label>New legal name</label><input type="text" id="cl-rn-name" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></div>
+    <div class="form-group"><label>Reason (required)</label>
+      <select id="cl-rn-reason" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px">
+        <option>Legal name correction</option><option>Standardize to Zoho master</option><option>Merge duplicate records</option><option>Other</option></select></div>`,
+    `<button class="btn btn-secondary" ${dataAct('clientLocations', id)}>← Back</button><button class="btn btn-primary" ${dataAct('clientRenameSubmit', id)}>Rename</button>`);
+}
+async function clientRenameSubmit(id) {
+  const name = (document.getElementById('cl-rn-name') || {}).value || '';
+  const reason = (document.getElementById('cl-rn-reason') || {}).value || '';
+  if (!name.trim()) { showToast('New name required', 'error'); return; }
+  const r = await api('/clients/' + id + '/rename', { method: 'POST', body: JSON.stringify({ name, reason }) }).catch(() => null);
+  if (r && !r.error) { showToast('Renamed to ' + r.name); const main = document.getElementById('main-content'); if (main && typeof renderClients === 'function') renderClients(main); closeModal(); }
+  else showToast((r && r.error) || 'Rename failed', 'error');
+}
+
 async function renderClients(el) {
   const clients = await api('/clients');
   if (!clients) return;
@@ -301,6 +378,7 @@ async function renderClients(el) {
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-secondary btn-sm" ${dataAct('viewClientById', _regClient(c))}>View</button>
         <button class="btn btn-gold btn-sm" ${dataAct('editClientById', _regClient(c))}>Edit</button>
+        ${['super_admin','ops_admin','ops_manager'].includes(APP.user?.role) ? `<button class="btn btn-sm" style="background:#ecfdf5;color:#047857;border:none;font-weight:600" ${dataAct('clientLocations', c.id)}>🏢 Locations</button>` : ''}
         <button class="btn btn-sm" style="background:#e0f2fe;color:#0369a1;border:none;font-weight:600" ${dataAct('manageClientCatalog', c.id, c.name)}>📦 Products</button>
         <button class="btn btn-sm" style="background:${c.active===0?'var(--success)':'var(--danger-soft-bg)'};color:${c.active===0?'#fff':'var(--danger)'};border:none" ${dataAct('toggleClientActive', c.id, c.name, c.active===0?0:1)}>${c.active===0?'Enable':'Disable'}</button>
       </div>
