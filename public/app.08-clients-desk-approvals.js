@@ -317,6 +317,7 @@ async function clientSyncOpen() {
   const r = await api('/client-sync/review').catch(() => null);
   if (!r || r.error) { openModal('Sync from Zoho', `<div class="u-muted">${h((r && r.error) || 'Could not load.')}</div>`, `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`); return; }
   APP._csProposals = r.proposals || [];
+  APP._csClients = ((await api('/clients').catch(() => [])) || []).map(c => ({ id: c.id, name: c.name, display_name: c.display_name }));
   renderClientSyncModal();
 }
 function renderClientSyncModal() {
@@ -326,6 +327,9 @@ function renderClientSyncModal() {
       `<button class="btn btn-secondary" ${dataAct('clientSyncRun')}>↻ Pull from Zoho</button><button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
     return;
   }
+  const selCss = 'padding:5px 8px;border:1px solid var(--border);border-radius:6px';
+  const clientOpts = (APP._csClients || []).map(c => `<option value="${h(c.id)}">${h(c.display_name && c.display_name !== c.name ? `${c.display_name} — ${c.name}` : c.name)}</option>`).join('');
+  const reasonSel = (i) => `<select id="cs-reason-${i}" style="${selCss}"><option>Legal name correction</option><option>Standardize to Zoho master</option><option>Merge duplicate records</option></select>`;
   const rows = ps.map((p, i) => {
     const matched = p.status === 'matched';
     const nameHtml = (matched && p.name_differs)
@@ -335,9 +339,11 @@ function renderClientSyncModal() {
       ? (p.name_differs ? '<span class="badge" style="background:#fff7ed;color:#9a3412">Name change</span>' : '<span class="badge" style="background:#eef2f6;color:#475569">Matched</span>')
       : '<span class="badge" style="background:#e7f1fb;color:#2563eb">New</span>';
     const actCtl = matched
-      ? `<select id="cs-act-${i}" style="padding:5px 8px;border:1px solid var(--border);border-radius:6px"><option value="replace" ${p.name_differs ? 'selected' : ''}>Replace name</option><option value="keep" ${p.name_differs ? '' : 'selected'}>Keep name</option></select>
-         <select id="cs-reason-${i}" style="padding:5px 8px;border:1px solid var(--border);border-radius:6px"><option>Legal name correction</option><option>Standardize to Zoho master</option><option>Merge duplicate records</option></select>`
-      : `<span class="u-muted" style="font-size:.78rem">Creates a new client</span>`;
+      ? `<select id="cs-act-${i}" style="${selCss}"><option value="replace" ${p.name_differs ? 'selected' : ''}>Replace name</option><option value="keep" ${p.name_differs ? '' : 'selected'}>Keep name</option></select>
+         ${reasonSel(i)}`
+      : `<select id="cs-map-${i}" style="${selCss}" ${dataChange('clientSyncMapToggle', i)}><option value="">➕ Create new client</option>${clientOpts}</select>
+         <select id="cs-act-${i}" style="${selCss};display:none"><option value="keep" selected>Keep its name</option><option value="replace">Rename to Zoho</option></select>
+         <span id="cs-reasonwrap-${i}" style="display:none">${reasonSel(i)}</span>`;
     const locs = (p.locations || []).map(l => `<div style="font-size:.76rem;color:var(--text-muted)">• ${h(l.display_name)} <span class="badge" style="font-size:.6rem;background:${l.state === 'new' ? '#e7f1fb;color:#2563eb' : '#eef2f6;color:#475569'}">${l.state}</span></div>`).join('') || '<div class="u-muted" style="font-size:.76rem">no addresses</div>';
     return `<div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:8px">
       <label style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" id="cs-inc-${i}" checked>
@@ -348,6 +354,14 @@ function renderClientSyncModal() {
   }).join('');
   openModal(`Sync from Zoho — ${ps.length} contact${ps.length === 1 ? '' : 's'}`, rows,
     `<button class="btn btn-secondary" ${dataAct('clientSyncRun')}>↻ Pull</button><span style="flex:1"></span><button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button><button class="btn btn-primary" ${dataAct('clientSyncApply')}>Apply selected</button>`);
+}
+function clientSyncMapToggle(i) {
+  const mapped = !!(document.getElementById('cs-map-' + i) || {}).value;
+  const act = document.getElementById('cs-act-' + i);
+  const rw = document.getElementById('cs-reasonwrap-' + i);
+  if (act) act.style.display = mapped ? '' : 'none';
+  if (rw) rw.style.display = (mapped && act && act.value === 'replace') ? '' : 'none';
+  if (act) act.onchange = () => { if (rw) rw.style.display = act.value === 'replace' ? '' : 'none'; };
 }
 async function clientSyncRun() {
   showToast('Pulling from Zoho…');
@@ -360,10 +374,18 @@ async function clientSyncApply() {
   const ps = APP._csProposals || [];
   const decisions = ps.map((p, i) => {
     if (!(document.getElementById('cs-inc-' + i) || {}).checked) return null;
-    const matched = p.status === 'matched';
-    const action = matched ? ((document.getElementById('cs-act-' + i) || {}).value || 'keep') : 'create';
-    const reason = (document.getElementById('cs-reason-' + i) || {}).value || '';
-    return { zoho_contact_id: p.zoho_contact_id, action, client_id: p.client_id, name: p.zoho_name, display_name: p.zoho_name, reason, locations: (p.locations || []).map(l => ({ zoho_address_id: l.zoho_address_id, display_name: l.display_name, shipping_address: l.shipping_address })) };
+    const val = (id) => (document.getElementById(id) || {}).value || '';
+    let action, client_id, reason = '';
+    if (p.status === 'matched') {
+      action = val('cs-act-' + i) || 'keep';
+      client_id = p.client_id;
+      reason = val('cs-reason-' + i);
+    } else {
+      const map = val('cs-map-' + i);
+      if (map) { action = val('cs-act-' + i) || 'keep'; client_id = map; reason = val('cs-reason-' + i); }
+      else { action = 'create'; client_id = null; }
+    }
+    return { zoho_contact_id: p.zoho_contact_id, action, client_id, name: p.zoho_name, display_name: p.zoho_name, reason, locations: (p.locations || []).map(l => ({ zoho_address_id: l.zoho_address_id, display_name: l.display_name, shipping_address: l.shipping_address })) };
   }).filter(Boolean);
   if (!decisions.length) { showToast('Nothing selected', 'error'); return; }
   const r = await api('/client-sync/apply', { method: 'POST', body: JSON.stringify({ decisions }) }).catch(() => null);

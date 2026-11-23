@@ -113,6 +113,37 @@ describe("client sync — apply", () => {
     expect(loc.d).toBe(1);
   });
 
+  it("manual map: a 'new' contact linked to an existing client (keep) links it + upserts locations", async () => {
+    // Isolated storage: seed a fresh unlinked client inside this test and map z-new onto it.
+    await db().prepare("INSERT OR IGNORE INTO clients (id,name,active) VALUES ('cMap','Globex Manual',1)").run();
+    const r = await (await post("/api/client-sync/apply", { decisions: [{
+      zoho_contact_id: "z-new", action: "keep", client_id: "cMap",
+      name: "Globex Technologies LLP", display_name: "Globex Technologies LLP",
+      locations: [{ zoho_address_id: "a9", display_name: "Globex · HQ", shipping_address: "Globex HQ" }],
+    }] }, saTok)).json() as any;
+    expect(r.results[0].outcome).toBe("linked");
+    expect(r.results[0].client_id).toBe("cMap");
+    const c = await db().prepare("SELECT name, zoho_contact_id FROM clients WHERE id='cMap'").first() as any;
+    expect(c.name).toBe("Globex Manual");        // keep leaves the name as-is
+    expect(c.zoho_contact_id).toBe("z-new");     // but links the Zoho contact
+    const loc = await db().prepare("SELECT COUNT(*) n FROM client_locations WHERE client_id='cMap'").first() as any;
+    expect(loc.n).toBe(1);
+  });
+
+  it("manual map: a 'new' contact mapped with replace renames the existing client", async () => {
+    await db().prepare("INSERT OR IGNORE INTO clients (id,name,active) VALUES ('cMap2','Globex Old',1)").run();
+    const r = await (await post("/api/client-sync/apply", { decisions: [{
+      zoho_contact_id: "z-new", action: "replace", client_id: "cMap2",
+      name: "Globex Technologies LLP", reason: "Merge duplicate records",
+      locations: [{ zoho_address_id: "a9", display_name: "Globex · HQ", shipping_address: "Globex HQ" }],
+    }] }, saTok)).json() as any;
+    expect(r.results[0].outcome).toBe("renamed");
+    const c = await db().prepare("SELECT name, legal_name, zoho_contact_id FROM clients WHERE id='cMap2'").first() as any;
+    expect(c.name).toBe("Globex Technologies LLP");
+    expect(c.legal_name).toBe("Globex Old");
+    expect(c.zoho_contact_id).toBe("z-new");
+  });
+
   it("rejects apply by a non-super-admin", async () => {
     expect((await post("/api/client-sync/apply", { decisions: [] }, opsTok)).status).toBe(403);
   });
