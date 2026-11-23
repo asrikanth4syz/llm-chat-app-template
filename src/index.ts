@@ -7187,6 +7187,7 @@ export default {
       if (path.match(/^\/api\/orders\/[^/]+\/zoho-dc-candidates$/)   && method==="GET")  return handleZohoDcCandidates(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/zoho-dc-import\/preview$/) && method==="POST") return handleZohoDcImportPreview(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/zoho-dc-import\/commit$/)  && method==="POST") return handleZohoDcImportCommit(request,env,path);
+      if (path === "/api/zoho-dc-worklist" && method==="GET") return handleZohoDcWorklist(request,env);
       if (path.match(/^\/api\/orders\/[^/]+\/index$/)        && method==="POST") return handleSetOrderIndex(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/pick$/)         && method==="POST") return handlePickOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/pick-draft$/)   && method==="POST") return handleSavePickDraft(request,env,path);
@@ -11374,11 +11375,23 @@ async function handleBillDC(request: Request, env: Env, path: string): Promise<R
 // never below zero. A value of 0 means the order is fully satisfied and nothing
 // more may be dispatched, delivered or scheduled against it.
 async function orderOutstanding(env: Env, orderId: string): Promise<number> {
-  const ord = await env.DB.prepare("SELECT COALESCE(SUM(qty),0) q FROM order_items WHERE order_id=?").bind(orderId).first() as {q:number}|null;
-  const del = await env.DB.prepare(
-    "SELECT COALESCE(SUM(di.qty_delivered),0) q FROM dc_items di JOIN delivery_challans dc ON di.dc_id=dc.id WHERE dc.order_id=?"
-  ).bind(orderId).first() as {q:number}|null;
-  return Math.max(0, (ord?.q||0) - (del?.q||0));
+  // Per-SKU shortfall: an order is settled only when EVERY line is met. Summing at the
+  // order total would let an over-delivery on one SKU offset another SKU still due, so
+  // we floor each line at 0 and add them up. (Delivered counts qty_delivered across the
+  // order's challans, as before.)
+  const { results: ord } = await env.DB.prepare(
+    "SELECT sku, COALESCE(SUM(qty),0) q FROM order_items WHERE order_id=? GROUP BY sku"
+  ).bind(orderId).all();
+  const { results: del } = await env.DB.prepare(
+    "SELECT di.sku AS sku, COALESCE(SUM(di.qty_delivered),0) q FROM dc_items di JOIN delivery_challans dc ON di.dc_id=dc.id WHERE dc.order_id=? GROUP BY di.sku"
+  ).bind(orderId).all();
+  const deliveredBySku: Record<string, number> = {};
+  for (const r of del as Record<string, unknown>[]) deliveredBySku[String(r.sku)] = Number(r.q) || 0;
+  let outstanding = 0;
+  for (const r of ord as Record<string, unknown>[]) {
+    outstanding += Math.max(0, (Number(r.q) || 0) - (deliveredBySku[String(r.sku)] || 0));
+  }
+  return outstanding;
 }
 
 // Units THIS challan can still legitimately deliver, each SKU capped by its
@@ -11634,6 +11647,62 @@ async function handleZohoDcImportCommit(request: Request, env: Env, path: string
     over_qty: rc.recon.totals.over_qty, unmatched_lines: rc.recon.totals.unmatched_lines,
     order_status: finalStatus?.status || order.status, closed,
   }, 201);
+}
+
+// GET /api/zoho-dc-worklist — every unlinked, detail-synced Zoho DC that matches a
+// SmartPantry client by name, with a suggested open order to import it into. The
+// cross-order companion to the per-order candidates list. Super admin only.
+async function handleZohoDcWorklist(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== "super_admin") return json({ error: "Only a super admin may import deliveries from Zoho." }, 403);
+  await ensureDcImportSchema(env);
+
+  const linked = new Set<string>();
+  for (const r of (await env.DB.prepare("SELECT zoho_dc_id FROM delivery_challans WHERE zoho_dc_id IS NOT NULL").all()).results as Record<string, unknown>[])
+    linked.add(String(r.zoho_dc_id));
+  const dcNumbers = new Set<string>();
+  for (const r of (await env.DB.prepare("SELECT dc_number FROM delivery_challans WHERE dc_number IS NOT NULL").all()).results as Record<string, unknown>[])
+    dcNumbers.add(normDc(r.dc_number));
+
+  // Clients keyed by normalized name (name is the match key until a Zoho customer_id
+  // map exists), and open orders grouped by client (newest first).
+  const byName = new Map<string, { id: string; name: string }[]>();
+  for (const c of (await env.DB.prepare("SELECT id,name FROM clients").all()).results as Record<string, unknown>[]) {
+    const k = normName(c.name); if (!k) continue;
+    const arr = byName.get(k) || []; arr.push({ id: String(c.id), name: String(c.name) }); byName.set(k, arr);
+  }
+  const openByClient = new Map<string, { id: string; ref: string; created: string }[]>();
+  for (const o of (await env.DB.prepare(
+    "SELECT id, client_id, order_reference, created_at FROM orders WHERE status NOT IN ('CLOSED','CANCELLED','DRAFT','REJECTED') ORDER BY created_at DESC"
+  ).all()).results as Record<string, unknown>[]) {
+    const cid = String(o.client_id || ""); if (!cid) continue;
+    const arr = openByClient.get(cid) || []; arr.push({ id: String(o.id), ref: String(o.order_reference || o.id), created: String(o.created_at || "") }); openByClient.set(cid, arr);
+  }
+
+  const { results } = await env.DB.prepare(
+    "SELECT zoho_dc_id, dc_number, dc_date, customer_name, line_count, qty_count FROM zoho_delivery_challans WHERE detail_ok=1 ORDER BY dc_date DESC, dc_number DESC LIMIT 500"
+  ).all();
+  const rows: Record<string, unknown>[] = [];
+  for (const r of results as Record<string, unknown>[]) {
+    const zid = String(r.zoho_dc_id);
+    if (linked.has(zid)) continue;
+    const clients = byName.get(normName(r.customer_name)) || [];
+    if (!clients.length) continue; // no matching client — awaits the name sync
+    let orders: { id: string; ref: string; created: string }[] = [];
+    for (const c of clients) orders = orders.concat(openByClient.get(c.id) || []);
+    orders.sort((a, b) => (a.created < b.created ? 1 : a.created > b.created ? -1 : 0));
+    const suggested = orders[0] || null;
+    rows.push({
+      zoho_dc_id: zid, dc_number: r.dc_number, dc_date: r.dc_date, customer_name: r.customer_name,
+      line_count: Number(r.line_count) || 0, qty_count: Number(r.qty_count) || 0,
+      matched_client_name: clients[0].name,
+      suggested_order_id: suggested?.id || null, suggested_order_ref: suggested?.ref || null,
+      open_order_count: orders.length,
+      already_in_smartpantry: dcNumbers.has(normDc(r.dc_number)),
+    });
+  }
+  return json({ count: rows.length, rows });
 }
 
 // Driver-facing delivery confirmation. An exact delivery (every line delivered as

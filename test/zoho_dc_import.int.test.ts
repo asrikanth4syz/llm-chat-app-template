@@ -66,6 +66,9 @@ beforeAll(async () => {
   await zdc("z2", "DUP-1", "Zoho Client"); await zi("z2", "A", "Rice", 10);
   await zdc("z3", "DC-5003", "Other Co"); await zi("z3", "A", "Rice", 60);
   await zdc("z5", "DC-5005", "Zoho Client"); await zi("z5", "A", "Rice", 60);
+  // OZ3 + z6: an over-delivery on A while C is still due — exercises per-line settlement.
+  await mkOrder("OZ3"); await it("OZ3", "A", "Rice", 60); await it("OZ3", "C", "Dal", 100);
+  await zdc("z6", "DC-5006", "Zoho Client"); await zi("z6", "A", "Rice", 160);
 
   saTok = await login("sa@sp.test", "pw123");
   cliTok = await login("cz@sp.test", "pw123");
@@ -133,5 +136,34 @@ describe("Zoho DC import — commit", () => {
     const body = await (await post("/api/orders/OZ2/zoho-dc-import/commit", { zoho_dc_id: "z5", confirm: true }, saTok)).json() as any;
     expect(body.order_status).toBe("CLOSED");
     expect(body.closed).toBe(true);
+  });
+});
+
+describe("Zoho DC import — bulk worklist", () => {
+  it("rejects a non-super-admin", async () => {
+    expect((await get("/api/zoho-dc-worklist", cliTok)).status).toBe(403);
+  });
+  it("lists unlinked client-matched DCs, excluding linked and mismatched ones", async () => {
+    // Storage is isolated per test, so link z1 here, then it must drop off the worklist.
+    await post("/api/orders/OZ/zoho-dc-import/commit", { zoho_dc_id: "z1", confirm: true }, saTok);
+    const r = await (await get("/api/zoho-dc-worklist", saTok)).json() as any;
+    const ids = (r.rows || []).map((x: any) => x.zoho_dc_id);
+    expect(ids).toContain("z2");
+    expect(ids).not.toContain("z1"); // just linked → excluded
+    expect(ids).not.toContain("z3"); // client name mismatch → excluded
+    const z2 = r.rows.find((x: any) => x.zoho_dc_id === "z2");
+    expect(z2.matched_client_name).toBe("Zoho Client");
+    expect(z2.already_in_smartpantry).toBe(true);
+    expect(z2.suggested_order_id).toBeTruthy(); // an open order exists for the client
+  });
+});
+
+describe("Zoho DC import — per-line settlement", () => {
+  it("keeps the order PARTIALLY_CLOSED when an over-delivery on one SKU leaves another due", async () => {
+    // OZ3 ordered A60 + C100; z6 delivers A160 (over). Order-total would read settled
+    // (160 ≥ 160), but C is still due, so per-line settlement must NOT close it.
+    const body = await (await post("/api/orders/OZ3/zoho-dc-import/commit", { zoho_dc_id: "z6", confirm: true }, saTok)).json() as any;
+    expect(body.order_status).toBe("PARTIALLY_CLOSED");
+    expect(body.closed).toBe(false);
   });
 });

@@ -1791,6 +1791,34 @@ async function zohoDcImportCommit(id, zohoId) {
   else showToast(`Imported ${r.dc_number} · ${r.imported_lines} line${r.imported_lines === 1 ? '' : 's'}${r.over_qty ? ` · ${r.over_qty} over` : ''}`);
   if (typeof openOrderFull === 'function') openOrderFull(id);
 }
+
+// Bulk worklist (super admin): every unlinked Zoho DC matched to an open order.
+async function zohoDcWorklist() {
+  openModal('Import from Zoho', _zdcLoad('Scanning synced Zoho challans…'), _zdcClose());
+  const res = await api('/zoho-dc-worklist').catch(() => null);
+  if (!res || res.error) { openModal('Import from Zoho', `<div class="u-muted">${h((res && res.error) || 'Could not load the worklist.')}</div>`, _zdcClose()); return; }
+  const rows = res.rows || [];
+  if (!rows.length) { openModal('Import from Zoho', `<div class="u-muted" style="padding:6px 2px">No unlinked Zoho delivery challans match an open order.<br><span style="font-size:.82rem">A challan appears here once its client name matches a SmartPantry client and its line items are synced.</span></div>`, _zdcClose()); return; }
+  const list = rows.map(r => {
+    const action = r.suggested_order_id
+      ? `<button class="btn btn-secondary btn-sm" ${dataAct('zohoWorklistReview', String(r.suggested_order_id), String(r.zoho_dc_id))}>Review → ${h(String(r.suggested_order_ref || r.suggested_order_id))}</button>`
+      : `<span class="u-muted" style="font-size:.78rem">No open order</span>`;
+    return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:8px">
+      <div style="min-width:0"><b style="color:var(--navy)">${h(String(r.dc_number || r.zoho_dc_id))}</b>
+        <span class="u-muted" style="font-size:.8rem">${h(r.dc_date || '')} · ${r.line_count} items · ${Number(r.qty_count || 0).toLocaleString('en-IN')} units</span>
+        <div class="u-muted" style="font-size:.78rem">${h(r.matched_client_name || '')}${r.open_order_count > 1 ? ` · ${r.open_order_count} open orders` : ''}</div>
+        ${r.already_in_smartpantry ? '<div style="color:var(--danger);font-size:.76rem;font-weight:700">⚠ A challan with this number already exists in SmartPantry</div>' : ''}</div>
+      ${action}
+    </div>`;
+  }).join('');
+  openModal(`Import from Zoho — ${rows.length} unlinked challan${rows.length === 1 ? '' : 's'}`, `<div class="u-muted" style="font-size:.82rem;margin-bottom:8px">Pick a challan to review it against its suggested order before importing.</div>${list}`, _zdcClose());
+}
+function zohoWorklistReview(orderId, zohoId) {
+  if (!orderId) { showToast('No open order to import into', 'error'); return; }
+  closeModal();
+  if (typeof openOrderFull === 'function') openOrderFull(orderId);
+  setTimeout(() => zohoDcImportPreview(orderId, zohoId), 350);
+}
 function ofMoreAmend(id) { const p = document.getElementById('of-more-pop'); if (p) p.classList.remove('on'); amendOrderModal(id); }
 
 /* ── Cancel dialog with a required reason (maps to the transition note) ── */
@@ -3716,6 +3744,9 @@ async function renderOrderQueue(el) {
       <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px" id="oq-subtitle">${filteredOrders().filter(o=>!['CLOSED','CANCELLED'].includes(o.status)).length} active orders</div>
     </div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      ${APP.user?.role === 'super_admin' ? `<button class="filter-select" ${dataAct('zohoDcWorklist')}
+        title="Import delivered Zoho challans into their matching orders"
+        style="font-size:.82rem;cursor:pointer">📥 Import from Zoho</button>` : ''}
       <button class="filter-select" id="oq-min-toggle" ${dataAct('oqToggleMinimise')}
         title="Collapse the summary tiles for a full-width order list"
         style="font-size:.82rem;cursor:pointer;${APP._oqMinimised?'background:var(--navy);color:#fff;border-color:var(--navy)':''}">${APP._oqMinimised?'⊞ Full view':'⊟ Minimise'}</button>
