@@ -311,6 +311,69 @@ async function clientRenameSubmit(id) {
   else showToast((r && r.error) || 'Rename failed', 'error');
 }
 
+// ---- Client sync from Zoho (super admin): review proposals → apply ------------
+async function clientSyncOpen() {
+  openModal('Sync from Zoho', `<div class="loading-state"><div class="spinner"></div><p>Loading proposals…</p></div>`, `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
+  const r = await api('/client-sync/review').catch(() => null);
+  if (!r || r.error) { openModal('Sync from Zoho', `<div class="u-muted">${h((r && r.error) || 'Could not load.')}</div>`, `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`); return; }
+  APP._csProposals = r.proposals || [];
+  renderClientSyncModal();
+}
+function renderClientSyncModal() {
+  const ps = APP._csProposals || [];
+  if (!ps.length) {
+    openModal('Sync from Zoho', `<div class="u-muted" style="padding:8px 2px">No Zoho contacts mirrored yet. Click <b>Pull from Zoho</b> to fetch them.</div>`,
+      `<button class="btn btn-secondary" ${dataAct('clientSyncRun')}>↻ Pull from Zoho</button><button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
+    return;
+  }
+  const rows = ps.map((p, i) => {
+    const matched = p.status === 'matched';
+    const nameHtml = (matched && p.name_differs)
+      ? `<span style="text-decoration:line-through;color:var(--text-muted)">${h(p.current_name || '')}</span> → <b style="color:var(--navy)">${h(p.zoho_name)}</b>`
+      : `<b style="color:var(--navy)">${h(p.zoho_name)}</b>`;
+    const tag = matched
+      ? (p.name_differs ? '<span class="badge" style="background:#fff7ed;color:#9a3412">Name change</span>' : '<span class="badge" style="background:#eef2f6;color:#475569">Matched</span>')
+      : '<span class="badge" style="background:#e7f1fb;color:#2563eb">New</span>';
+    const actCtl = matched
+      ? `<select id="cs-act-${i}" style="padding:5px 8px;border:1px solid var(--border);border-radius:6px"><option value="replace" ${p.name_differs ? 'selected' : ''}>Replace name</option><option value="keep" ${p.name_differs ? '' : 'selected'}>Keep name</option></select>
+         <select id="cs-reason-${i}" style="padding:5px 8px;border:1px solid var(--border);border-radius:6px"><option>Legal name correction</option><option>Standardize to Zoho master</option><option>Merge duplicate records</option></select>`
+      : `<span class="u-muted" style="font-size:.78rem">Creates a new client</span>`;
+    const locs = (p.locations || []).map(l => `<div style="font-size:.76rem;color:var(--text-muted)">• ${h(l.display_name)} <span class="badge" style="font-size:.6rem;background:${l.state === 'new' ? '#e7f1fb;color:#2563eb' : '#eef2f6;color:#475569'}">${l.state}</span></div>`).join('') || '<div class="u-muted" style="font-size:.76rem">no addresses</div>';
+    return `<div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:8px">
+      <label style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" id="cs-inc-${i}" checked>
+        <span style="min-width:0">${nameHtml} ${tag}
+          <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">${actCtl}</div>
+          <div style="margin-top:8px">${locs}</div></span></label>
+    </div>`;
+  }).join('');
+  openModal(`Sync from Zoho — ${ps.length} contact${ps.length === 1 ? '' : 's'}`, rows,
+    `<button class="btn btn-secondary" ${dataAct('clientSyncRun')}>↻ Pull</button><span style="flex:1"></span><button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button><button class="btn btn-primary" ${dataAct('clientSyncApply')}>Apply selected</button>`);
+}
+async function clientSyncRun() {
+  showToast('Pulling from Zoho…');
+  const r = await api('/client-sync/run', { method: 'POST', body: '{}' }).catch(() => null);
+  if (!r || r.error) { showToast((r && r.error) || 'Sync failed', 'error'); return; }
+  showToast(`Mirrored ${r.mirrored || 0} contacts`);
+  clientSyncOpen();
+}
+async function clientSyncApply() {
+  const ps = APP._csProposals || [];
+  const decisions = ps.map((p, i) => {
+    if (!(document.getElementById('cs-inc-' + i) || {}).checked) return null;
+    const matched = p.status === 'matched';
+    const action = matched ? ((document.getElementById('cs-act-' + i) || {}).value || 'keep') : 'create';
+    const reason = (document.getElementById('cs-reason-' + i) || {}).value || '';
+    return { zoho_contact_id: p.zoho_contact_id, action, client_id: p.client_id, name: p.zoho_name, display_name: p.zoho_name, reason, locations: (p.locations || []).map(l => ({ zoho_address_id: l.zoho_address_id, display_name: l.display_name, shipping_address: l.shipping_address })) };
+  }).filter(Boolean);
+  if (!decisions.length) { showToast('Nothing selected', 'error'); return; }
+  const r = await api('/client-sync/apply', { method: 'POST', body: JSON.stringify({ decisions }) }).catch(() => null);
+  if (!r || r.error) { showToast((r && r.error) || 'Apply failed', 'error'); return; }
+  const n = (o) => r.results.filter((x) => x.outcome === o).length;
+  showToast(`Applied — ${n('renamed')} renamed, ${n('created')} created, ${n('linked')} linked${n('skipped') ? `, ${n('skipped')} skipped` : ''}`);
+  closeModal();
+  const main = document.getElementById('main-content'); if (main && typeof renderClients === 'function') renderClients(main);
+}
+
 async function renderClients(el) {
   const clients = await api('/clients');
   if (!clients) return;
@@ -391,7 +454,10 @@ async function renderClients(el) {
       <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">Client Directory</div>
       <div style="font-size:.82rem;color:var(--text-muted);margin-top:2px">${clients.length} clients · ${fmt(totalSpent)} spent of ${fmt(totalBudget)} total budget</div>
     </div>
-    <button class="btn btn-gold" ${dataAct('addClientModal')}>${iconPlus(14)} Add Client</button>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      ${APP.user?.role === 'super_admin' ? `<button class="btn btn-secondary" ${dataAct('clientSyncOpen')}>↻ Sync from Zoho</button>` : ''}
+      <button class="btn btn-gold" ${dataAct('addClientModal')}>${iconPlus(14)} Add Client</button>
+    </div>
   </div>
 
   <!-- Summary tiles -->

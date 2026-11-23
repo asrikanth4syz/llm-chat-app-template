@@ -18,6 +18,7 @@ import type { ApprovalLeg } from "./quote_access";
 import { recurringOccurrences, istTodayISO, addDaysISO, type RecurrencePlan } from "./recurring";
 import { normName, normDc, clientNameMatches, reconcileDcImport, type OrderLine, type ZohoLine } from "./zoho_dc_import";
 import { accountLabel, clientDisplayLabel } from "./client_account";
+import { planClientSync, zohoAddrText, zohoAddrId, type ZohoContact, type ClientRow, type ExistingLocation } from "./client_sync";
 
 // ── JWT ──────────────────────────────────────────────────────────────
 async function signJWT(payload: object, secret: string): Promise<string> {
@@ -7296,6 +7297,9 @@ export default {
       if (path.match(/^\/api\/clients\/[^/]+\/locations$/) && method==="POST") return handleAddClientLocation(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/locations\/[^/]+$/) && method==="PATCH") return handlePatchClientLocation(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/rename$/) && method==="POST") return handleRenameClient(request,env,path);
+      if (path==="/api/client-sync/run"    && method==="POST") return handleClientSyncRun(request,env);
+      if (path==="/api/client-sync/review" && method==="GET")  return handleClientSyncReview(request,env);
+      if (path==="/api/client-sync/apply"  && method==="POST") return handleClientSyncApply(request,env);
       if (path.match(/^\/api\/clients\/[^/]+\/catalog$/) && method==="POST")   return handleAddClientCatalogItems(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/assign-zoho-catalog$/) && method==="POST") return handleAssignZohoCatalog(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/catalog\/[^/]+$/) && method==="PATCH")  return handlePatchClientCatalogItem(request,env,path);
@@ -12770,6 +12774,190 @@ async function handleRenameClient(request: Request, env: Env, path: string): Pro
   await env.DB.prepare("UPDATE users SET org=? WHERE client_id=?").bind(newName, id).run().catch(() => {});
   await audit(env, user, "RENAME_CLIENT", "client", id, old, `${newName}: ${reason}`);
   return json({ id, name: newName, previous: old });
+}
+
+// ════════════════════════════════════════════════════════════════════
+// CLIENT SYNC (P2) — Zoho contacts + addresses → accounts/locations
+// Mirror Zoho contacts, review proposals (match / rename / location upserts),
+// apply them (audited). Read-only to Zoho. Super admin only.
+// ════════════════════════════════════════════════════════════════════
+const ZOHO_CONTACT_MAX_PAGES = 20;
+const ZOHO_CONTACT_DETAIL_CAP = 150;
+async function ensureClientSyncSchema(env: Env): Promise<void> {
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS zoho_contacts ( zoho_contact_id TEXT PRIMARY KEY, name TEXT, gstin TEXT, billing_address TEXT, status TEXT, synced_at TEXT )").run().catch(() => {});
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS zoho_contact_addresses ( id INTEGER PRIMARY KEY AUTOINCREMENT, zoho_contact_id TEXT NOT NULL, zoho_address_id TEXT, label TEXT, address_text TEXT )").run().catch(() => {});
+  await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_zca_contact ON zoho_contact_addresses (zoho_contact_id)").run().catch(() => {});
+}
+
+// Pull Zoho Books customer contacts + their addresses into the mirror. Non-throwing;
+// `fetchImpl` is injected in tests. Bounded by page/detail caps to stay inside rate limits.
+async function runZohoContactSync(env: Env, opts: { fetchImpl?: FetchImpl } = {}): Promise<Record<string, unknown>> {
+  const fetchImpl = opts.fetchImpl || fetch;
+  await ensureClientSyncSchema(env);
+  const miss = await zohoMissingSecrets(env);
+  if (miss.length) return { status: "not_configured", missing: miss };
+  const orgId = env.ZOHO_BOOKS_ORG_ID || env.ZOHO_INVENTORY_ORG_ID || "";
+  let token = await zohoGetToken(env, fetchImpl);
+  const stamp = new Date().toISOString();
+  const seen: { id: string; name: string; gstin: string; status: string }[] = [];
+  let page = 1, reAuthed = false;
+  while (page <= ZOHO_CONTACT_MAX_PAGES) {
+    const qs = new URLSearchParams({ organization_id: orgId, per_page: "200", page: String(page), contact_type: "customer" });
+    let res: Response;
+    try { res = await fetchImpl(`https://www.zohoapis.${zohoDc(env)}/books/v3/contacts?${qs.toString()}`, { headers: { Authorization: `Zoho-oauthtoken ${token}` } }); }
+    catch { break; }
+    if (res.status === 401 && !reAuthed) { token = await zohoGetToken(env, fetchImpl, true); reAuthed = true; continue; }
+    if (!res.ok) break;
+    const data = await res.json().catch(() => ({})) as Record<string, unknown> & { page_context?: { has_more_page?: boolean } };
+    const items = Array.isArray(data.contacts) ? data.contacts as Record<string, unknown>[] : [];
+    for (const z of items) {
+      const id = String(z.contact_id ?? ""); if (!id) continue;
+      seen.push({ id, name: String(z.contact_name ?? z.company_name ?? ""), gstin: String(z.gst_no ?? ""), status: String(z.status ?? "") });
+    }
+    if (!data.page_context?.has_more_page) break;
+    page++;
+  }
+  let mirrored = 0, detailed = 0;
+  for (const c of seen) {
+    let billing = "";
+    const addrs: { id: string; label: string; text: string }[] = [];
+    if (detailed < ZOHO_CONTACT_DETAIL_CAP) {
+      try {
+        const dres = await fetchImpl(`https://www.zohoapis.${zohoDc(env)}/books/v3/contacts/${encodeURIComponent(c.id)}?organization_id=${encodeURIComponent(orgId)}`, { headers: { Authorization: `Zoho-oauthtoken ${token}` } });
+        if (dres.ok) {
+          const dd = await dres.json().catch(() => ({})) as { contact?: Record<string, unknown> };
+          const ct = dd.contact || {};
+          billing = zohoAddrText(ct.billing_address as Record<string, unknown>);
+          const list = Array.isArray(ct.addresses) ? ct.addresses as Record<string, unknown>[] : [];
+          for (const a of list) addrs.push({ id: zohoAddrId(a), label: String(a.attention ?? a.address ?? "").slice(0, 40), text: zohoAddrText(a) });
+          if (!addrs.length && ct.shipping_address) addrs.push({ id: zohoAddrId(ct.shipping_address as Record<string, unknown>), label: "Shipping", text: zohoAddrText(ct.shipping_address as Record<string, unknown>) });
+          detailed++;
+        }
+      } catch { /* detail is best-effort */ }
+    }
+    await env.DB.prepare(
+      "INSERT INTO zoho_contacts (zoho_contact_id,name,gstin,billing_address,status,synced_at) VALUES (?,?,?,?,?,?) ON CONFLICT(zoho_contact_id) DO UPDATE SET name=excluded.name, gstin=excluded.gstin, billing_address=CASE WHEN excluded.billing_address<>'' THEN excluded.billing_address ELSE zoho_contacts.billing_address END, status=excluded.status, synced_at=excluded.synced_at"
+    ).bind(c.id, c.name, c.gstin, billing, c.status, stamp).run().catch(() => {});
+    if (addrs.length) {
+      await env.DB.prepare("DELETE FROM zoho_contact_addresses WHERE zoho_contact_id=?").bind(c.id).run().catch(() => {});
+      const ins = env.DB.prepare("INSERT INTO zoho_contact_addresses (zoho_contact_id,zoho_address_id,label,address_text) VALUES (?,?,?,?)");
+      try { await env.DB.batch(addrs.map(a => ins.bind(c.id, a.id || null, a.label || null, a.text || null))); } catch { /* non-fatal */ }
+    }
+    mirrored++;
+  }
+  return { status: "ok", mirrored, detailed };
+}
+
+// POST /api/client-sync/run — pull Zoho contacts into the mirror. Super admin.
+async function handleClientSyncRun(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== "super_admin") return json({ error: "Only a super admin may sync clients from Zoho." }, 403);
+  const r = await runZohoContactSync(env);
+  if (r.status === "not_configured") return json({ error: "Zoho is not configured — missing: " + (r.missing as string[]).join(", ") }, 400);
+  await audit(env, user, "CLIENT_SYNC_RUN", "client", "*", undefined, `mirrored ${r.mirrored}`);
+  return json(r);
+}
+
+// GET /api/client-sync/review — proposals computed from the mirror + current clients.
+async function handleClientSyncReview(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== "super_admin") return json({ error: "Forbidden" }, 403);
+  await ensureClientSyncSchema(env); await ensureClientLocationSchema(env);
+  const { results: crows } = await env.DB.prepare("SELECT zoho_contact_id,name,gstin,billing_address FROM zoho_contacts ORDER BY name LIMIT 1000").all();
+  const addrByContact: Record<string, { zoho_address_id: string; label: string; address_text: string }[]> = {};
+  for (const a of (await env.DB.prepare("SELECT zoho_contact_id,zoho_address_id,label,address_text FROM zoho_contact_addresses").all()).results as Record<string, unknown>[]) {
+    const k = String(a.zoho_contact_id);
+    (addrByContact[k] = addrByContact[k] || []).push({ zoho_address_id: String(a.zoho_address_id || ""), label: String(a.label || ""), address_text: String(a.address_text || "") });
+  }
+  const contacts: ZohoContact[] = (crows as Record<string, unknown>[]).map(c => ({
+    zoho_contact_id: String(c.zoho_contact_id), name: String(c.name || ""), gstin: String(c.gstin || ""),
+    billing_address: String(c.billing_address || ""), addresses: addrByContact[String(c.zoho_contact_id)] || [],
+  }));
+  const clients = (await env.DB.prepare("SELECT id,name,legal_name,display_name,zoho_contact_id FROM clients WHERE active=1").all()).results as unknown as ClientRow[];
+  const locsByClient: Record<string, ExistingLocation[]> = {};
+  for (const l of (await env.DB.prepare("SELECT id,client_id,zoho_address_id,display_name FROM client_locations").all()).results as Record<string, unknown>[]) {
+    const k = String(l.client_id);
+    (locsByClient[k] = locsByClient[k] || []).push({ id: String(l.id), zoho_address_id: l.zoho_address_id ? String(l.zoho_address_id) : null, display_name: String(l.display_name || "") });
+  }
+  const proposals = planClientSync(contacts, clients, locsByClient);
+  return json({ count: proposals.length, proposals });
+}
+
+// Upsert the locations in a decision for a client (by zoho_address_id).
+async function applySyncLocations(env: Env, clientId: string, locations: Array<Record<string, unknown>>): Promise<void> {
+  if (!locations || !locations.length) return;
+  const existing = (await env.DB.prepare("SELECT id,zoho_address_id FROM client_locations WHERE client_id=?").bind(clientId).all()).results as Record<string, unknown>[];
+  const byAddr = new Map<string, string>();
+  for (const e of existing) if (e.zoho_address_id) byAddr.set(String(e.zoho_address_id), String(e.id));
+  let count = existing.length;
+  for (const loc of locations) {
+    const aid = String(loc.zoho_address_id || "");
+    const display = String(loc.display_name || "").trim(); if (!display) continue;
+    const addr = String(loc.shipping_address || "");
+    const existingId = aid ? byAddr.get(aid) : undefined;
+    if (existingId) {
+      await env.DB.prepare("UPDATE client_locations SET display_name=?, shipping_address=? WHERE id=?").bind(display, addr, existingId).run().catch(() => {});
+    } else {
+      const isDef = count === 0 ? 1 : 0;
+      await env.DB.prepare("INSERT INTO client_locations (id,client_id,display_name,shipping_address,zoho_address_id,is_default,active) VALUES (?,?,?,?,?,?,1)")
+        .bind(uid(), clientId, display, addr, aid || null, isDef).run().catch(() => {});
+      count++;
+    }
+  }
+}
+
+// POST /api/client-sync/apply — carry out the chosen decisions. Super admin.
+async function handleClientSyncApply(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== "super_admin") return json({ error: "Only a super admin may apply a client sync." }, 403);
+  await ensureClientSyncSchema(env); await ensureClientLocationSchema(env);
+  const body = await request.json().catch(() => ({})) as { decisions?: Array<Record<string, unknown>> };
+  const decisions = Array.isArray(body.decisions) ? body.decisions : [];
+  const results: Record<string, unknown>[] = [];
+  for (const d of decisions) {
+    const zid = String(d.zoho_contact_id || "");
+    const action = String(d.action || "keep");
+    const contact = zid ? await env.DB.prepare("SELECT zoho_contact_id,name,gstin,billing_address FROM zoho_contacts WHERE zoho_contact_id=?").bind(zid).first() as Record<string, unknown> | null : null;
+    const locations = Array.isArray(d.locations) ? d.locations as Array<Record<string, unknown>> : [];
+    try {
+      if (action === "create") {
+        const name = String(d.name || contact?.name || "").trim();
+        if (!name) { results.push({ zoho_contact_id: zid, outcome: "skipped", reason: "no name" }); continue; }
+        const cid = uid();
+        await env.DB.prepare("INSERT INTO clients (id,name,display_name,legal_name,zoho_contact_id,address,gstin,active) VALUES (?,?,?,?,?,?,?,1)")
+          .bind(cid, name, String(d.display_name || name), name, zid || null, String(contact?.billing_address || ""), String(contact?.gstin || "")).run();
+        await applySyncLocations(env, cid, locations);
+        await audit(env, user, "CLIENT_SYNC_CREATE", "client", cid, undefined, name);
+        results.push({ zoho_contact_id: zid, outcome: "created", client_id: cid });
+      } else {
+        const clientId = String(d.client_id || "");
+        const client = clientId ? await env.DB.prepare("SELECT id,name,legal_name FROM clients WHERE id=?").bind(clientId).first() as Record<string, unknown> | null : null;
+        if (!client) { results.push({ zoho_contact_id: zid, outcome: "skipped", reason: "no client" }); continue; }
+        if (action === "replace") {
+          const newName = String(d.name || contact?.name || "").trim();
+          const reason = String(d.reason || "").trim();
+          if (!newName) { results.push({ zoho_contact_id: zid, outcome: "skipped", reason: "no name" }); continue; }
+          if (!reason) { results.push({ zoho_contact_id: zid, outcome: "skipped", reason: "reason required" }); continue; }
+          const old = String(client.name || "");
+          if (newName !== old) {
+            await env.DB.prepare("UPDATE clients SET name=?, legal_name=COALESCE(NULLIF(legal_name,''), ?) WHERE id=?").bind(newName, old, clientId).run();
+            await env.DB.prepare("UPDATE users SET org=? WHERE client_id=?").bind(newName, clientId).run().catch(() => {});
+            await audit(env, user, "RENAME_CLIENT", "client", clientId, old, `${newName}: ${reason}`);
+          }
+        }
+        // keep or replace: link the Zoho contact id, then upsert locations.
+        await env.DB.prepare("UPDATE clients SET zoho_contact_id=COALESCE(NULLIF(zoho_contact_id,''), ?) WHERE id=?").bind(zid || null, clientId).run().catch(() => {});
+        await applySyncLocations(env, clientId, locations);
+        results.push({ zoho_contact_id: zid, outcome: action === "replace" ? "renamed" : "linked", client_id: clientId });
+      }
+    } catch (e) {
+      results.push({ zoho_contact_id: zid, outcome: "error", error: (e as Error).message });
+    }
+  }
+  return json({ applied: results.length, results });
 }
 
 // ════════════════════════════════════════════════════════════════════
