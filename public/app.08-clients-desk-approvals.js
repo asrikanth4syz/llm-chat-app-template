@@ -396,6 +396,7 @@ async function renderClients(el) {
           <div style="width:40px;height:40px;border-radius:50%;background:var(--navy);color:#fff;display:flex;align-items:center;justify-content:center;font-size:.82rem;font-weight:700;flex-shrink:0">${initials}</div>
           <div>
             <div style="font-weight:800;font-size:.95rem;color:var(--navy)">${h(c.name)}</div>
+            ${c.display_name && c.display_name !== c.name ? `<div style="font-size:.74rem;color:var(--text-muted);font-weight:600">${h(c.display_name)}</div>` : ''}
             <div style="display:flex;align-items:center;gap:6px;margin-top:3px">
               ${c.zone?`<span style="font-size:.68rem;font-weight:600;background:#e6f1fb;color:var(--blue);border-radius:4px;padding:1px 6px">${c.zone}</span>`:''}
               <span style="font-size:.72rem;color:${hColor};font-weight:700">★ ${c.health_score||0}/100</span>
@@ -1181,14 +1182,44 @@ function readTaxIds(prefix) {
 
 async function addClientModal() {
   await loadZones();
-  openModal('Add Client', clientFormFields('cl'),
+  // Zoho-synced contacts for the name dropdown (internal admins; needs the mirror filled).
+  let picker = '';
+  if (['super_admin', 'ops_admin', 'ops_manager'].includes(APP.user?.role)) {
+    const z = await api('/zoho-contacts').catch(() => null);
+    const avail = ((z && z.contacts) || []).filter(c => !c.already_client);
+    APP._zohoContacts = avail;
+    if (avail.length) {
+      picker = `<div class="form-group"><label>Pull name from Zoho (optional)</label>
+        <select id="cl-zoho" ${dataChange('clientSyncPrefill')} style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px">
+          <option value="">— Select a Zoho contact —</option>
+          ${avail.map((c, i) => `<option value="${i}">${h(c.name)}${c.gstin ? ' · ' + h(c.gstin) : ''}</option>`).join('')}
+        </select></div>`;
+    }
+  }
+  const display = `<div class="form-group"><label>Display name (short — shown in lists)</label>
+    <input type="text" id="cl-display" placeholder="e.g. ServiceNow · EGL" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"></div>
+    <input type="hidden" id="cl-zohoid">`;
+  openModal('Add Client', picker + display + clientFormFields('cl'),
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
      <button class="btn btn-primary" ${dataAct('saveClient')}>Add Client</button>`);
+}
+function clientSyncPrefill() {
+  const sel = document.getElementById('cl-zoho'); if (!sel || sel.value === '') return;
+  const c = (APP._zohoContacts || [])[+sel.value]; if (!c) return;
+  const set = (id, v) => { const e = document.getElementById(id); if (e && v != null) e.value = v; };
+  set('cl-name', c.name);
+  set('cl-address', c.billing_address || '');
+  set('cl-gstin', c.gstin || '');
+  set('cl-zohoid', c.zoho_contact_id || '');
+  const dn = document.getElementById('cl-display');
+  if (dn && !dn.value) dn.value = String(c.name || '').split(/\s+/).slice(0, 2).join(' ');
 }
 
 async function saveClient() {
   const body = {
     name: document.getElementById('cl-name').value.trim(),
+    display_name: (document.getElementById('cl-display') || {}).value || '',
+    zoho_contact_id: (document.getElementById('cl-zohoid') || {}).value || '',
     contact_name: document.getElementById('cl-cname').value,
     contact_email: document.getElementById('cl-email').value,
     contact_phone: document.getElementById('cl-phone').value,

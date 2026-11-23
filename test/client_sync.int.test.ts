@@ -117,3 +117,20 @@ describe("client sync — apply", () => {
     expect((await post("/api/client-sync/apply", { decisions: [] }, opsTok)).status).toBe(403);
   });
 });
+
+describe("zoho contacts dropdown + add client", () => {
+  it("lists mirrored contacts flagged if already a client", async () => {
+    const r = await (await get("/api/zoho-contacts", opsTok)).json() as any;
+    const sn = r.contacts.find((c: any) => c.zoho_contact_id === "z-sn");
+    const nw = r.contacts.find((c: any) => c.zoho_contact_id === "z-new");
+    expect(sn.already_client).toBe(true);   // cS is linked to z-sn
+    expect(nw.already_client).toBe(false);
+  });
+  it("creates a client carrying display_name + zoho_contact_id", async () => {
+    const r = await (await post("/api/clients", { name: "Globex Technologies LLP", display_name: "Globex", zoho_contact_id: "z-new" }, saTok)).json() as any;
+    expect(r.id).toBeTruthy();
+    const c = await db().prepare("SELECT name, display_name, zoho_contact_id FROM clients WHERE id=?").bind(r.id).first() as any;
+    expect(c.display_name).toBe("Globex");
+    expect(c.zoho_contact_id).toBe("z-new");
+  });
+});

@@ -7302,6 +7302,7 @@ export default {
       // Clients
       if (path==="/api/clients"  && method==="GET")  return handleListClients(request,env);
       if (path==="/api/clients"  && method==="POST") return handleAddClient(request,env);
+      if (path==="/api/zoho-contacts" && method==="GET") return handleZohoContactsList(request,env);
       if (path.match(/^\/api\/clients\/[^/]+\/budget$/) && method==="GET") return handleClientBudget(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/catalog$/) && method==="GET")    return handleGetClientCatalog(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/locations$/) && method==="GET")  return handleListClientLocations(request,env,path);
@@ -12637,11 +12638,30 @@ async function handleAddClient(request: Request, env: Env): Promise<Response> {
   const body = await request.json() as Record<string,unknown>;
   const { gstin, pan, error: taxErr } = resolveTaxIds(body.gstin, body.pan);
   if (taxErr) return json({ error: taxErr }, 400);
+  await ensureClientLocationSchema(env); // display_name / legal_name / zoho_contact_id columns
   const id = `c${uid().slice(0,6)}`;
-  await env.DB.prepare("INSERT INTO clients (id,name,contact_email,contact_name,monthly_budget,approval_threshold,zone,contact_phone,map_pin,address,gstin,pan) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
-    .bind(id,body.name,body.contact_email||null,body.contact_name||null,body.monthly_budget||500000,body.approval_threshold||100000,body.zone||'',body.contact_phone||'',body.map_pin||'',body.address||'',gstin,pan).run();
+  await env.DB.prepare("INSERT INTO clients (id,name,display_name,zoho_contact_id,contact_email,contact_name,monthly_budget,approval_threshold,zone,contact_phone,map_pin,address,gstin,pan) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+    .bind(id,body.name,body.display_name||null,body.zoho_contact_id||null,body.contact_email||null,body.contact_name||null,body.monthly_budget||500000,body.approval_threshold||100000,body.zone||'',body.contact_phone||'',body.map_pin||'',body.address||'',gstin,pan).run();
   await audit(env, user, "CREATE", "client", id, undefined, body.name as string);
   return json({id}, 201);
+}
+
+// GET /api/zoho-contacts — mirrored Zoho contacts for the Add-Client dropdown, each
+// flagged if already a client (by zoho_contact_id). Internal admins only.
+async function handleZohoContactsList(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!CLIENT_ADMIN_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  await ensureClientSyncSchema(env); await ensureClientLocationSchema(env);
+  const linked = new Set<string>();
+  for (const r of (await env.DB.prepare("SELECT zoho_contact_id FROM clients WHERE zoho_contact_id IS NOT NULL AND zoho_contact_id<>''").all()).results as Record<string, unknown>[])
+    linked.add(String(r.zoho_contact_id));
+  const { results } = await env.DB.prepare("SELECT zoho_contact_id,name,gstin,billing_address FROM zoho_contacts ORDER BY name LIMIT 1000").all();
+  const contacts = (results as Record<string, unknown>[]).map(r => ({
+    zoho_contact_id: r.zoho_contact_id, name: r.name, gstin: r.gstin || null,
+    billing_address: r.billing_address || null, already_client: linked.has(String(r.zoho_contact_id)),
+  }));
+  return json({ contacts });
 }
 
 async function handleClientBudget(request: Request, env: Env, path: string): Promise<Response> {
