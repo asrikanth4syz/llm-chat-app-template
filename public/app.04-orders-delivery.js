@@ -1313,6 +1313,7 @@ function ofShellHtml() {
     canAdjustQty ? `<button ${dataAct('ofMoreAdjustQty', id)}>⚖ Adjust ordered qty…</button>` : '',
     canPreClose ? `<button ${dataAct('preCloseOrder', id)}>Pre-close order…</button>` : '',
     (s === 'CLOSED' && APP.user?.role === 'super_admin') ? `<button ${dataAct('reopenOrderModal', id)}>↩ Reopen order…</button>` : '',
+    (APP.user?.role === 'super_admin' && !['DRAFT', 'CANCELLED', 'CLOSED'].includes(s)) ? `<button ${dataAct('zohoDcImportStart', id)}>📥 Import delivery from Zoho…</button>` : '',
     canCancel ? `<button class="d" ${dataAct('orderCancelDialog', id)}>Cancel order…</button>` : '',
   ].filter(Boolean).join('');
   return `
@@ -1728,6 +1729,68 @@ function orderMoreToggle(el) {
   }
 }
 function ofMoreDownload(id) { const p = document.getElementById('of-more-pop'); if (p) p.classList.remove('on'); viewOrderDrilldown(id); }
+
+// ---- Zoho DC import (super admin): candidates → reconcile preview → confirm ----
+const _zdcLoad = (m) => `<div class="loading-state"><div class="spinner"></div><p>${h(m)}</p></div>`;
+const _zdcClose = () => `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`;
+const _zdcWarn = (m) => `<div style="background:var(--danger-bg);border:1px solid var(--danger);color:var(--danger);border-radius:8px;padding:8px 10px;margin-bottom:8px;font-size:.84rem;font-weight:600">⚠ ${h(m)}</div>`;
+const _zdcNote = (m) => `<div style="background:var(--amber-bg);border:1px solid var(--gold-border);color:var(--amber-text);border-radius:8px;padding:8px 10px;margin-bottom:8px;font-size:.84rem">${h(m)}</div>`;
+
+async function zohoDcImportStart(id) {
+  const p = document.getElementById('of-more-pop'); if (p) p.classList.remove('on');
+  openModal('Import delivery from Zoho', _zdcLoad('Finding Zoho challans for this client…'), _zdcClose());
+  const res = await api('/orders/' + id + '/zoho-dc-candidates').catch(() => null);
+  if (!res || res.error) { openModal('Import delivery from Zoho', `<div class="u-muted">${h((res && res.error) || 'Could not load candidates.')}</div>`, _zdcClose()); return; }
+  const rows = res.candidates || [];
+  if (!rows.length) {
+    openModal('Import delivery from Zoho', `<div class="u-muted" style="padding:6px 2px">No unlinked Zoho delivery challans match <b>${h(res.client_name || 'this client')}</b>.<br><span style="font-size:.82rem">Client names must match between Zoho and SmartPantry; run a Zoho DC sync if a recent challan is missing.</span></div>`, _zdcClose());
+    return;
+  }
+  const list = rows.map(r => `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:8px">
+    <div style="min-width:0"><b style="color:var(--navy)">${h(String(r.dc_number || r.zoho_dc_id))}</b>
+      <span class="u-muted" style="font-size:.8rem">${h(r.dc_date || '')} · ${r.line_count} items · ${Number(r.qty_count || 0).toLocaleString('en-IN')} units</span>
+      ${r.already_in_smartpantry ? '<div style="color:var(--danger);font-size:.76rem;font-weight:700">⚠ A challan with this number already exists in SmartPantry</div>' : ''}
+      ${!r.detail_ready ? '<div style="color:var(--amber-text);font-size:.76rem">Line items not synced yet</div>' : ''}</div>
+    <button class="btn btn-secondary btn-sm" ${dataAct('zohoDcImportPreview', id, String(r.zoho_dc_id))}>Review →</button>
+  </div>`).join('');
+  openModal('Import delivery from Zoho', `<div class="u-muted" style="font-size:.82rem;margin-bottom:8px">Client: <b>${h(res.client_name || '')}</b> — pick a delivered challan to review before importing.</div>${list}`, _zdcClose());
+}
+
+async function zohoDcImportPreview(id, zohoId) {
+  openModal('Import delivery from Zoho', _zdcLoad('Reconciling the challan against this order…'), _zdcClose());
+  const p = await api('/orders/' + id + '/zoho-dc-import/preview', { method: 'POST', body: JSON.stringify({ zoho_dc_id: zohoId }) }).catch(() => null);
+  if (!p || p.error) { openModal('Import delivery from Zoho', `<div class="u-muted">${h((p && p.error) || 'Could not build the preview.')}</div>`, `<button class="btn btn-secondary" ${dataAct('zohoDcImportStart', id)}>← Back</button>${_zdcClose()}`); return; }
+  const rowHtml = (p.lines || []).map(l => {
+    const color = l.status === 'over' ? 'var(--danger)' : l.status === 'unmatched' ? 'var(--text-muted)' : 'var(--success)';
+    const label = l.status === 'over' ? `Over +${Number(l.over).toLocaleString('en-IN')}` : l.status === 'unmatched' ? 'Unmatched · skipped' : 'OK';
+    return `<tr><td><b>${h(l.name)}</b><div class="u-subtiny" style="font-family:monospace">${h(l.sku)}</div></td>
+      <td class="u-right">${Number(l.ordered).toLocaleString('en-IN')}</td>
+      <td class="u-right">${Number(l.import_qty).toLocaleString('en-IN')}</td>
+      <td class="u-right">${Number(l.due).toLocaleString('en-IN')}</td>
+      <td style="color:${color};font-weight:700">${label}</td></tr>`;
+  }).join('');
+  const banners = [];
+  if (!p.client_match) banners.push(_zdcWarn('Client name does not match this order — import blocked.'));
+  if (p.duplicate) banners.push(_zdcWarn(p.duplicate_reason || 'This challan is already in SmartPantry.'));
+  if (!p.lines_detail_ready) banners.push(_zdcWarn('Line items are not synced yet — run a Zoho sync and retry.'));
+  if (p.totals && p.totals.unmatched_lines) banners.push(_zdcNote(`${p.totals.unmatched_lines} line(s) have no matching SKU and will be skipped.`));
+  if (p.totals && p.totals.over_qty) banners.push(_zdcNote(`${Number(p.totals.over_qty).toLocaleString('en-IN')} unit(s) over-delivered — allowed and flagged.`));
+  const footer = `<button class="btn btn-secondary" ${dataAct('zohoDcImportStart', id)}>← Back</button>` +
+    (p.can_commit ? `<button class="btn btn-primary" ${dataAct('zohoDcImportCommit', id, zohoId)}>Confirm &amp; import</button>` : `<button class="btn btn-primary" disabled title="Resolve the flagged issues to import">Import</button>`);
+  openModal(`Import ${h(String(p.dc_number || ''))}`, `
+    <div class="u-muted" style="font-size:.82rem;margin-bottom:8px">Zoho customer <b>${h(p.customer_name || '')}</b> · order client <b>${h(p.client_name || '')}</b> · DC date ${h(p.dc_date || '—')}</div>
+    ${banners.join('')}
+    <div style="overflow-x:auto"><table class="table" style="font-size:.84rem;margin:0"><thead><tr><th>Item</th><th class="u-right">Ordered</th><th class="u-right">Delivering</th><th class="u-right">Due</th><th>Status</th></tr></thead><tbody>${rowHtml || '<tr><td colspan="5" class="u-muted" style="padding:14px;text-align:center">No line items on this challan.</td></tr>'}</tbody></table></div>`, footer);
+}
+
+async function zohoDcImportCommit(id, zohoId) {
+  const r = await api('/orders/' + id + '/zoho-dc-import/commit', { method: 'POST', body: JSON.stringify({ zoho_dc_id: zohoId, confirm: true }) }).catch(() => null);
+  if (!r || r.error) { showToast((r && r.error) || 'Import failed', 'error'); return; }
+  closeModal();
+  if (r.deduped) showToast('Already imported', 'info');
+  else showToast(`Imported ${r.dc_number} · ${r.imported_lines} line${r.imported_lines === 1 ? '' : 's'}${r.over_qty ? ` · ${r.over_qty} over` : ''}`);
+  if (typeof openOrderFull === 'function') openOrderFull(id);
+}
 function ofMoreAmend(id) { const p = document.getElementById('of-more-pop'); if (p) p.classList.remove('on'); amendOrderModal(id); }
 
 /* ── Cancel dialog with a required reason (maps to the transition note) ── */

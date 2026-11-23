@@ -16,6 +16,7 @@ import {
 } from "./quote_approval";
 import type { ApprovalLeg } from "./quote_access";
 import { recurringOccurrences, istTodayISO, addDaysISO, type RecurrencePlan } from "./recurring";
+import { normName, normDc, clientNameMatches, reconcileDcImport, type OrderLine, type ZohoLine } from "./zoho_dc_import";
 
 // ── JWT ──────────────────────────────────────────────────────────────
 async function signJWT(payload: object, secret: string): Promise<string> {
@@ -2180,7 +2181,36 @@ async function ensureZohoDCTable(env: Env): Promise<void> {
   await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_zdc_ym ON zoho_delivery_challans(ym)").run().catch(() => {});
   await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_zdc_customer ON zoho_delivery_challans(customer_id)").run().catch(() => {});
   await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_zdc_detail ON zoho_delivery_challans(detail_ok)").run().catch(() => {});
+  // Line items of each Zoho DC, persisted during the detail backfill so the order
+  // import can reconcile item-by-item (the header sync only keeps counts).
+  await env.DB.prepare(
+    "CREATE TABLE IF NOT EXISTS zoho_dc_items ( id INTEGER PRIMARY KEY AUTOINCREMENT, zoho_dc_id TEXT NOT NULL, zoho_item_id TEXT, sku TEXT, name TEXT, qty REAL NOT NULL DEFAULT 0 )"
+  ).run().catch(() => {});
+  await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_zdci_dc ON zoho_dc_items (zoho_dc_id)").run().catch(() => {});
   _zdcReady = true;
+}
+
+// Extract the import-relevant fields from a Zoho DC detail line_item.
+function zohoDcLineFields(li: unknown): { item_id: string; sku: string; name: string; qty: number } {
+  const o = (li || {}) as Record<string, unknown>;
+  return {
+    item_id: String(o.item_id ?? "").trim(),
+    sku: String(o.sku ?? "").trim(),
+    name: String(o.name ?? "").trim(),
+    qty: Number(o.quantity ?? 0) || 0,
+  };
+}
+
+// Statements that replace a Zoho DC's persisted line items (delete-then-insert), for
+// batching alongside the header write so one DC is one bounded set of subrequests.
+function zohoDcItemStmts(env: Env, id: string, lines: unknown[]): D1PreparedStatement[] {
+  const out: D1PreparedStatement[] = [env.DB.prepare("DELETE FROM zoho_dc_items WHERE zoho_dc_id=?").bind(id)];
+  const ins = env.DB.prepare("INSERT INTO zoho_dc_items (zoho_dc_id,zoho_item_id,sku,name,qty) VALUES (?,?,?,?,?)");
+  for (const li of lines) {
+    const f = zohoDcLineFields(li);
+    out.push(ins.bind(id, f.item_id || null, f.sku || null, f.name || null, f.qty));
+  }
+  return out;
 }
 
 // The ym (YYYY-MM) `RECENT_MONTHS` before `now` — the lower bound of the window
@@ -2382,6 +2412,7 @@ async function zohoDCBackfillDetails(env: Env, fetchImpl: FetchImpl, cap: number
     const qtyCount = lines.reduce((s: number, li) => s + (Number((li as { quantity?: unknown }).quantity ?? 0) || 0), 0);
     const invoiceNos = zohoDcInvoiceNumbers(detail, {});
     writes.push(up.bind(lineCount, qtyCount, JSON.stringify(invoiceNos), stamp, id));
+    writes.push(...zohoDcItemStmts(env, id, lines)); // persist the line items for order import
     r.detailed_now++; processed++;
     if (writes.length >= ZOHO_DC.WRITE_CHUNK) await flush();
   }
@@ -2415,6 +2446,7 @@ async function zohoDCDetailByIds(env: Env, fetchImpl: FetchImpl, ids: string[], 
       await env.DB.prepare(
         "UPDATE zoho_delivery_challans SET line_count=?, qty_count=?, invoice_numbers=?, detail_ok=1, synced_at=? WHERE zoho_dc_id=?"
       ).bind(lines.length, qty, JSON.stringify(zohoDcInvoiceNumbers(detail, {})), stamp, id).run();
+      await env.DB.batch(zohoDcItemStmts(env, id, lines)).catch(() => {}); // persist line items for order import
       r.detailed_now++;
     } catch (e) { r.failed++; if (r.errors.length < 50) r.errors.push((e as Error).message); }
   }
@@ -3478,6 +3510,12 @@ async function ensureFeatureTables(env: Env): Promise<void> {
     `CREATE INDEX IF NOT EXISTS idx_pml_session ON paste_match_log (parse_session_id, line_no);`,
     `CREATE INDEX IF NOT EXISTS idx_pml_metrics ON paste_match_log (phase, client_id, created_at);`,
     `CREATE TABLE IF NOT EXISTS paste_idempotency ( idempotency_key TEXT PRIMARY KEY, order_id TEXT NOT NULL, client_id TEXT NOT NULL, created_at TEXT DEFAULT (datetime('now')) );`,
+    // Zoho DC import (P1): the Zoho challan's line items (persisted during the detail
+    // backfill) + an audit log of every import attempt. Re-sync replaces a DC's lines.
+    `CREATE TABLE IF NOT EXISTS zoho_dc_items ( id INTEGER PRIMARY KEY AUTOINCREMENT, zoho_dc_id TEXT NOT NULL, zoho_item_id TEXT, sku TEXT, name TEXT, qty REAL NOT NULL DEFAULT 0 );`,
+    `CREATE INDEX IF NOT EXISTS idx_zdci_dc ON zoho_dc_items (zoho_dc_id);`,
+    `CREATE TABLE IF NOT EXISTS dc_import_log ( id TEXT PRIMARY KEY, order_id TEXT NOT NULL, zoho_dc_id TEXT NOT NULL, dc_number TEXT, actor_id TEXT, actor_name TEXT, outcome TEXT NOT NULL, flags TEXT DEFAULT '[]', created_at TEXT DEFAULT (datetime('now')) );`,
+    `CREATE INDEX IF NOT EXISTS idx_dcimportlog_order ON dc_import_log (order_id);`,
   ];
   // Column adds for the receiving spine — idempotent (errors swallowed if present).
   const alters: string[] = [
@@ -3505,6 +3543,10 @@ async function ensureFeatureTables(env: Env): Promise<void> {
     `ALTER TABLE inventory ADD COLUMN serving_info TEXT`,
     `ALTER TABLE inventory ADD COLUMN storage_info TEXT`,
     `ALTER TABLE inventory ADD COLUMN lifecycle_status TEXT DEFAULT 'draft'`,
+    // Zoho DC import (P1): link a recorded delivery back to the Zoho challan it came
+    // from (idempotency key + provenance). Partial-unique so many NULLs are allowed.
+    `ALTER TABLE delivery_challans ADD COLUMN zoho_dc_id TEXT`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_dc_zoho ON delivery_challans(zoho_dc_id) WHERE zoho_dc_id IS NOT NULL`,
   ];
   for (const sql of [...stmts, ...alters]) { try { await env.DB.prepare(sql).run(); } catch { /* exists / non-fatal */ } }
   // Seed the editable claim-screening dictionaries once (deterministic ids →
@@ -7142,6 +7184,9 @@ export default {
       if (path.match(/^\/api\/orders\/[^/]+\/amendments$/)    && method==="GET")  return handleListAmendments(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/transition$/)   && method==="POST") return handleTransitionOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/reopen$/)       && method==="POST") return handleReopenOrder(request,env,path);
+      if (path.match(/^\/api\/orders\/[^/]+\/zoho-dc-candidates$/)   && method==="GET")  return handleZohoDcCandidates(request,env,path);
+      if (path.match(/^\/api\/orders\/[^/]+\/zoho-dc-import\/preview$/) && method==="POST") return handleZohoDcImportPreview(request,env,path);
+      if (path.match(/^\/api\/orders\/[^/]+\/zoho-dc-import\/commit$/)  && method==="POST") return handleZohoDcImportCommit(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/index$/)        && method==="POST") return handleSetOrderIndex(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/pick$/)         && method==="POST") return handlePickOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/pick-draft$/)   && method==="POST") return handleSavePickDraft(request,env,path);
@@ -11390,6 +11435,205 @@ async function handleReopenOrder(request: Request, env: Env, path: string): Prom
     .bind(uid(), id, "CLOSED", "PARTIALLY_CLOSED", user!.sub, user!.name, `Reopened by super admin — ${reason}`).run();
   await audit(env, user, "REOPEN", "order", id, "CLOSED", `PARTIALLY_CLOSED: ${reason}`);
   return json({ id, status: "PARTIALLY_CLOSED" });
+}
+
+// ════════════════════════════════════════════════════════════════════
+// ZOHO → SMARTPANTRY DELIVERY CHALLAN IMPORT (P1) — super admin only
+// Import an already-delivered Zoho DC into the matching order after a
+// human-confirmed cross-check. Match by client name; dedupe on DC number /
+// zoho_dc_id; exact SKU match; over-delivery allowed + flagged. Read-only to Zoho.
+// ════════════════════════════════════════════════════════════════════
+let _dcImportReady = false;
+async function ensureDcImportSchema(env: Env): Promise<void> {
+  await ensureZohoDCTable(env); // zoho_dc_items + mirror
+  if (_dcImportReady) return;
+  await env.DB.prepare("ALTER TABLE delivery_challans ADD COLUMN zoho_dc_id TEXT").run().catch(() => {});
+  await env.DB.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_dc_zoho ON delivery_challans(zoho_dc_id) WHERE zoho_dc_id IS NOT NULL").run().catch(() => {});
+  await env.DB.prepare(
+    "CREATE TABLE IF NOT EXISTS dc_import_log ( id TEXT PRIMARY KEY, order_id TEXT NOT NULL, zoho_dc_id TEXT NOT NULL, dc_number TEXT, actor_id TEXT, actor_name TEXT, outcome TEXT NOT NULL, flags TEXT DEFAULT '[]', created_at TEXT DEFAULT (datetime('now')) )"
+  ).run().catch(() => {});
+  _dcImportReady = true;
+}
+
+// Units already delivered per SKU on an order (DELIVERED challans only).
+async function orderDeliveredBySku(env: Env, orderId: string): Promise<Record<string, number>> {
+  const { results } = await env.DB.prepare(
+    "SELECT di.sku AS sku, COALESCE(SUM(di.qty_delivered),0) AS d FROM dc_items di JOIN delivery_challans dc ON di.dc_id=dc.id WHERE dc.order_id=? AND dc.status='DELIVERED' GROUP BY di.sku"
+  ).bind(orderId).all();
+  const m: Record<string, number> = {};
+  for (const r of results as Record<string, unknown>[]) m[String(r.sku)] = Number(r.d) || 0;
+  return m;
+}
+
+async function dcImportOrder(env: Env, orderId: string): Promise<Record<string, unknown> | null> {
+  return env.DB.prepare(
+    "SELECT o.id, o.client_id, o.status, o.created_at, o.order_period, c.name AS client_name FROM orders o LEFT JOIN clients c ON o.client_id=c.id WHERE o.id=?"
+  ).bind(orderId).first() as Promise<Record<string, unknown> | null>;
+}
+
+// GET /api/orders/:id/zoho-dc-candidates — unlinked Zoho DCs whose customer matches the
+// order's client name (normalized), each flagged if its DC number already exists here.
+async function handleZohoDcCandidates(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== "super_admin") return json({ error: "Only a super admin may import deliveries from Zoho." }, 403);
+  await ensureDcImportSchema(env);
+  const orderId = path.split("/").slice(-2)[0];
+  const order = await dcImportOrder(env, orderId);
+  if (!order) return json({ error: "Not found" }, 404);
+  const clientName = String(order.client_name || "");
+
+  const linked = new Set<string>();
+  for (const r of (await env.DB.prepare("SELECT zoho_dc_id FROM delivery_challans WHERE zoho_dc_id IS NOT NULL").all()).results as Record<string, unknown>[])
+    linked.add(String(r.zoho_dc_id));
+  const dcNumbers = new Set<string>();
+  for (const r of (await env.DB.prepare("SELECT dc_number FROM delivery_challans WHERE dc_number IS NOT NULL").all()).results as Record<string, unknown>[])
+    dcNumbers.add(normDc(r.dc_number));
+
+  const { results } = await env.DB.prepare(
+    "SELECT zoho_dc_id, dc_number, dc_date, customer_name, line_count, qty_count, invoiced_status, detail_ok FROM zoho_delivery_challans ORDER BY dc_date DESC, dc_number DESC LIMIT 500"
+  ).all();
+  const candidates = (results as Record<string, unknown>[])
+    .filter(r => !linked.has(String(r.zoho_dc_id)) && clientNameMatches(r.customer_name, clientName))
+    .map(r => ({
+      zoho_dc_id: r.zoho_dc_id, dc_number: r.dc_number, dc_date: r.dc_date,
+      customer_name: r.customer_name, line_count: Number(r.line_count) || 0,
+      qty_count: Number(r.qty_count) || 0, invoiced_status: r.invoiced_status,
+      detail_ready: Number(r.detail_ok) === 1,
+      already_in_smartpantry: dcNumbers.has(normDc(r.dc_number)),
+    }));
+  return json({ order_id: orderId, client_name: clientName, candidates });
+}
+
+// Build the reconciliation for one Zoho DC against the order (no writes).
+async function dcImportReconcile(env: Env, order: Record<string, unknown>, zohoDcId: string) {
+  const header = await env.DB.prepare(
+    "SELECT zoho_dc_id, dc_number, dc_date, customer_name, detail_ok FROM zoho_delivery_challans WHERE zoho_dc_id=?"
+  ).bind(zohoDcId).first() as Record<string, unknown> | null;
+  if (!header) return { error: "Zoho delivery challan not found." as string };
+
+  const { results: oi } = await env.DB.prepare("SELECT sku,name,qty FROM order_items WHERE order_id=?").bind(String(order.id)).all();
+  const delivered = await orderDeliveredBySku(env, String(order.id));
+  const orderLines: OrderLine[] = (oi as Record<string, unknown>[]).map(r => ({
+    sku: String(r.sku), name: String(r.name || r.sku), qty_ordered: Number(r.qty) || 0, delivered_so_far: delivered[String(r.sku)] || 0,
+  }));
+  const { results: zi } = await env.DB.prepare("SELECT sku,name,qty FROM zoho_dc_items WHERE zoho_dc_id=?").bind(zohoDcId).all();
+  const zohoLines: ZohoLine[] = (zi as Record<string, unknown>[]).map(r => ({ sku: String(r.sku || ""), name: String(r.name || ""), qty: Number(r.qty) || 0 }));
+
+  const recon = reconcileDcImport(orderLines, zohoLines);
+  const client_match = clientNameMatches(header.customer_name, order.client_name);
+
+  const linkedRow = await env.DB.prepare("SELECT id FROM delivery_challans WHERE zoho_dc_id=?").bind(zohoDcId).first() as { id?: string } | null;
+  const dupNumRow = await env.DB.prepare(
+    "SELECT dc_number FROM delivery_challans WHERE dc_number IS NOT NULL AND order_id!=? LIMIT 500"
+  ).bind(String(order.id)).all();
+  const numExists = (dupNumRow.results as Record<string, unknown>[]).some(r => normDc(r.dc_number) === normDc(header.dc_number));
+  const already_linked = !!linkedRow?.id;
+  const number_exists = numExists;
+  const duplicate = already_linked || number_exists;
+  const duplicate_reason = already_linked ? "This Zoho DC is already imported." : number_exists ? "A challan with this number already exists in SmartPantry." : "";
+
+  const lines_detail_ready = Number(header.detail_ok) === 1 && zohoLines.length > 0;
+  const can_commit = client_match && !duplicate && lines_detail_ready && recon.totals.matched_lines > 0;
+  return {
+    header, client_match, duplicate, already_linked, number_exists, duplicate_reason,
+    lines_detail_ready, recon, can_commit,
+  };
+}
+
+// POST /api/orders/:id/zoho-dc-import/preview — dry-run reconciliation; writes nothing.
+async function handleZohoDcImportPreview(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== "super_admin") return json({ error: "Only a super admin may import deliveries from Zoho." }, 403);
+  await ensureDcImportSchema(env);
+  const orderId = path.split("/").slice(-3)[0];
+  const order = await dcImportOrder(env, orderId);
+  if (!order) return json({ error: "Order not found" }, 404);
+  const body = await request.json().catch(() => ({})) as { zoho_dc_id?: string };
+  const zohoDcId = String(body.zoho_dc_id || "").trim();
+  if (!zohoDcId) return json({ error: "zoho_dc_id is required" }, 400);
+  const rc = await dcImportReconcile(env, order, zohoDcId);
+  if ("error" in rc) return json({ error: rc.error }, 404);
+  return json({
+    order_id: orderId, client_name: order.client_name, zoho_dc_id: zohoDcId,
+    dc_number: rc.header.dc_number, dc_date: rc.header.dc_date, customer_name: rc.header.customer_name,
+    client_match: rc.client_match, duplicate: rc.duplicate, duplicate_reason: rc.duplicate_reason,
+    lines_detail_ready: rc.lines_detail_ready,
+    lines: rc.recon.lines, totals: rc.recon.totals, verdict: rc.recon.verdict, can_commit: rc.can_commit,
+  });
+}
+
+// POST /api/orders/:id/zoho-dc-import/commit — idempotent; writes the DC + items via the
+// standard tables, settles the order, and logs the import.
+async function handleZohoDcImportCommit(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (user!.role !== "super_admin") return json({ error: "Only a super admin may import deliveries from Zoho." }, 403);
+  await ensureDcImportSchema(env);
+  const orderId = path.split("/").slice(-3)[0];
+  const order = await dcImportOrder(env, orderId);
+  if (!order) return json({ error: "Order not found" }, 404);
+  if (ORDER_TERMINAL.includes(String(order.status)) && String(order.status) === "CANCELLED")
+    return json({ error: "This order is cancelled — a delivery cannot be imported.", code: "ORDER_CANCELLED" }, 409);
+  const body = await request.json().catch(() => ({})) as { zoho_dc_id?: string; confirm?: boolean };
+  const zohoDcId = String(body.zoho_dc_id || "").trim();
+  if (!zohoDcId) return json({ error: "zoho_dc_id is required" }, 400);
+
+  // Idempotency: this Zoho DC already imported → no-op.
+  const existing = await env.DB.prepare("SELECT id, dc_number FROM delivery_challans WHERE zoho_dc_id=?").bind(zohoDcId).first() as { id?: string; dc_number?: string } | null;
+  if (existing?.id) return json({ deduped: true, dc_id: existing.id, dc_number: existing.dc_number || null, order_status: order.status });
+
+  const rc = await dcImportReconcile(env, order, zohoDcId);
+  if ("error" in rc) return json({ error: rc.error }, 404);
+  if (!rc.client_match) return json({ error: "The Zoho DC's customer does not match this order's client.", code: "CLIENT_MISMATCH" }, 422);
+  if (rc.duplicate) return json({ error: rc.duplicate_reason, code: "DUPLICATE_DC" }, 409);
+  if (!rc.lines_detail_ready) return json({ error: "This Zoho DC's line items are not synced yet — run a Zoho sync and retry.", code: "DETAIL_NOT_READY" }, 409);
+  const matched = rc.recon.lines.filter(l => l.matched);
+  if (matched.length === 0) return json({ error: "No line items match this order's SKUs.", code: "NO_MATCH" }, 422);
+
+  const dcId = uid();
+  const dcNumber = String(rc.header.dc_number || ("Z" + zohoDcId.slice(-6)));
+  const deliveredAt = String(rc.header.dc_date || "").slice(0, 10) || new Date().toISOString().slice(0, 10);
+  const totalQty = matched.reduce((s, l) => s + l.import_qty, 0);
+  const clientName = String(order.client_name || "");
+
+  const stmts: D1PreparedStatement[] = [
+    env.DB.prepare(
+      "INSERT INTO delivery_challans (id,order_id,status,total_qty,delivered_qty,dc_number,client_name,delivered_at,dispatched_at,zoho_dc_id) VALUES (?,?, 'DELIVERED', ?,?,?,?,?,?,?)"
+    ).bind(dcId, orderId, totalQty, totalQty, dcNumber, clientName, deliveredAt, deliveredAt, zohoDcId),
+  ];
+  const insItem = env.DB.prepare("INSERT INTO dc_items (id,dc_id,sku,name,qty_ordered,qty_delivered) VALUES (?,?,?,?,?,?)");
+  for (const l of matched) stmts.push(insItem.bind(uid(), dcId, l.sku, l.name, l.ordered, l.import_qty));
+  await env.DB.batch(stmts);
+
+  // Settle: close when nothing is outstanding, else move a pre-delivery order to
+  // PARTIALLY_CLOSED so its state reflects the recorded delivery.
+  let closed = false;
+  try { closed = await closeOrderIfSettled(env, orderId, user, `Imported Zoho DC ${dcNumber}`); } catch { /* non-fatal */ }
+  if (!closed) {
+    const cur = await env.DB.prepare("SELECT status FROM orders WHERE id=?").bind(orderId).first() as { status?: string } | null;
+    const st = String(cur?.status || "");
+    if (st && !["PARTIALLY_CLOSED", "CLOSED", "CANCELLED", "REJECTED", "DRAFT"].includes(st)) {
+      await env.DB.prepare("UPDATE orders SET status='PARTIALLY_CLOSED',updated_at=datetime('now') WHERE id=? AND status=?").bind(orderId, st).run().catch(() => {});
+      await env.DB.prepare("INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)")
+        .bind(uid(), orderId, st, "PARTIALLY_CLOSED", user!.sub, user!.name, `Delivery imported from Zoho DC ${dcNumber}`).run().catch(() => {});
+    }
+  }
+
+  const flags: string[] = [];
+  if (rc.recon.has_over) flags.push(`over:${rc.recon.totals.over_qty}`);
+  if (rc.recon.has_unmatched) flags.push(`unmatched:${rc.recon.totals.unmatched_lines}`);
+  await env.DB.prepare("INSERT INTO dc_import_log (id,order_id,zoho_dc_id,dc_number,actor_id,actor_name,outcome,flags) VALUES (?,?,?,?,?,?,?,?)")
+    .bind(uid(), orderId, zohoDcId, dcNumber, user!.sub, user!.name, "imported", JSON.stringify(flags)).run().catch(() => {});
+  await audit(env, user, "IMPORT_ZOHO_DC", "order", orderId, undefined, `${dcNumber} · ${matched.length} lines · ${totalQty} units${flags.length ? " · " + flags.join(", ") : ""}`);
+
+  const finalStatus = await env.DB.prepare("SELECT status FROM orders WHERE id=?").bind(orderId).first() as { status?: string } | null;
+  return json({
+    dc_id: dcId, dc_number: dcNumber, imported_lines: matched.length, total_qty: totalQty,
+    over_qty: rc.recon.totals.over_qty, unmatched_lines: rc.recon.totals.unmatched_lines,
+    order_status: finalStatus?.status || order.status, closed,
+  }, 201);
 }
 
 // Driver-facing delivery confirmation. An exact delivery (every line delivered as
