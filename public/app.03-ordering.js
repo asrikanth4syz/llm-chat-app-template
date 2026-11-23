@@ -495,16 +495,23 @@ async function showAdhocOrderModal() {
 
   // Ops roles pick which client the request is for; client roles order for themselves.
   let clientPicker = '';
+  let locBlock = '';
   if (!isClientRole) {
     const clients = await api('/clients');
     const opts = (clients||[]).map(c => `<option value="${c.id}">${h(c.name)}</option>`).join('');
     clientPicker = `
       <div style="margin-bottom:14px">
         <label style="display:block;margin-bottom:6px;font-weight:600;font-size:.85rem">Client</label>
-        <select id="adhoc-client" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px">
+        <select id="adhoc-client" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"
+          ${dataChangeEl('onAdhocClientChange')}>
           <option value="">— Select a client —</option>${opts}
         </select>
       </div>`;
+    locBlock = `<div id="adhoc-loc-wrap" style="margin-bottom:14px"></div>`;
+  } else {
+    // P2c: a multi-location client chooses the ship-to location for the request.
+    const locs = await loadOrderLocations(APP.user.client_id);
+    locBlock = orderLocationPickerHTML(locs, 'adhoc-location');
   }
 
   openModal('⚡ Quick / Ad-hoc Request',
@@ -513,6 +520,7 @@ async function showAdhocOrderModal() {
        4SYZ will confirm pricing, then the request follows the usual approval &amp; delivery flow.
      </div>
      ${clientPicker}
+     ${locBlock}
      <div style="display:grid;grid-template-columns:1fr 72px 84px 34px;gap:8px;margin-bottom:6px;font-size:.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em">
        <div>Item / description</div><div>Qty</div><div>Unit</div><div></div>
      </div>
@@ -537,6 +545,15 @@ async function showAdhocOrderModal() {
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
      <button class="btn btn-gold" ${dataAct('submitAdhocOrder')}>Submit Request</button>`
   );
+}
+
+// Ad-hoc ops client picker changed → (re)load the ship-to location picker.
+async function onAdhocClientChange(el) {
+  const wrap = document.getElementById('adhoc-loc-wrap'); if (!wrap) return;
+  if (!el.value) { wrap.innerHTML = ''; return; }
+  wrap.innerHTML = `<div class="u-muted" style="font-size:.8rem">Loading locations…</div>`;
+  const locs = await loadOrderLocations(el.value);
+  wrap.innerHTML = orderLocationPickerHTML(locs, 'adhoc-location');
 }
 
 async function submitAdhocOrder() {
@@ -566,6 +583,7 @@ async function submitAdhocOrder() {
   const btn = document.querySelector('#modal-footer .btn-gold');
   if (btn) { btn.disabled = true; btn.textContent = 'Submitting…'; }
 
+  const locationId = document.getElementById('adhoc-location')?.value || '';
   const result = await api('/orders', {
     method: 'POST',
     body: JSON.stringify({
@@ -573,6 +591,7 @@ async function submitAdhocOrder() {
       items,
       order_type: 'Ad-Hoc',
       ...(notes ? { notes } : {}),
+      ...(locationId ? { location_id: locationId } : {}),
       ...(APP._adhocImage ? { image: APP._adhocImage } : {}),
     }),
   });
@@ -1148,6 +1167,36 @@ function setOrderType(type, btn) {
   if (type !== 'Urgent') { const nb = document.getElementById('cart-need-by'); if (nb) nb.value = ''; }
 }
 
+// P2c: active ship-to locations for a client (cached per client for the session).
+async function loadOrderLocations(clientId) {
+  if (!clientId || clientId === '__self__') return [];
+  APP._orderLocCache = APP._orderLocCache || {};
+  if (APP._orderLocCache[clientId]) return APP._orderLocCache[clientId];
+  const r = await api(`/clients/${clientId}/order-locations`).catch(() => null);
+  const locs = (r && r.locations) || [];
+  APP._orderLocCache[clientId] = locs;
+  return locs;
+}
+// Render a "Deliver to" picker — only when the client has more than one location
+// (a single-location client resolves server-side, so no choice is needed).
+function orderLocationPickerHTML(locs, selectId) {
+  if (!locs || locs.length <= 1) return '';
+  const opts = locs.map(l => `<option value="${h(l.id)}"${l.is_default ? ' selected' : ''}>${h(l.display_name)}${l.shipping_address ? ' — ' + h(l.shipping_address) : ''}</option>`).join('');
+  return `<div style="margin-bottom:16px">
+    <label style="display:block;margin-bottom:6px;font-weight:600">📍 Deliver to</label>
+    <select id="${selectId}" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px">${opts}</select>
+  </div>`;
+}
+// Ops client picker changed: enable the submit button + (re)load the location picker.
+async function onOrderClientChange(btnId, el) {
+  const b = document.getElementById(btnId); if (b) b.disabled = !el.value;
+  const wrap = document.getElementById('order-loc-wrap'); if (!wrap) return;
+  if (!el.value) { wrap.innerHTML = ''; return; }
+  wrap.innerHTML = `<div class="u-muted" style="font-size:.8rem;margin-bottom:12px">Loading locations…</div>`;
+  const locs = await loadOrderLocations(el.value);
+  wrap.innerHTML = orderLocationPickerHTML(locs, 'order-location');
+}
+
 async function submitOrder() {
   if (!APP.cart.length) { showToast('Cart is empty', 'error'); return; }
 
@@ -1158,30 +1207,36 @@ async function submitOrder() {
     <p style="font-size:.85rem;color:var(--text-muted)">${APP.cart.length} item type(s) · ${APP.cart.reduce((s,i)=>s+i.qty,0)} units</p>`;
 
   if (isClientRole) {
-    // Client users order for their own account — no dropdown needed
+    // Client users order for their own account — no client dropdown, but a
+    // multi-location account still chooses the ship-to location.
     const clientName = APP.user.org || 'your account';
+    const locs = await loadOrderLocations(APP.user.client_id);
+    const picker = orderLocationPickerHTML(locs, 'order-location');
     openModal('Confirm Order',
       `<div style="margin-bottom:16px;padding:12px;background:var(--bg);border-radius:8px;border:1px solid var(--border)">
         <div style="font-size:.8rem;color:var(--text-muted);margin-bottom:2px">Ordering for</div>
         <div style="font-weight:700;font-size:1rem">${h(clientName)}</div>
       </div>
+      ${picker}
       ${summary}`,
       `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
        <button class="btn btn-gold" ${dataAct('confirmOrder')}>Confirm & Submit</button>`
     );
   } else {
-    // Ops / admin roles pick the client from the list
+    // Ops / admin roles pick the client from the list; the location picker loads
+    // into order-loc-wrap once a client is chosen.
     const clients = await api('/clients');
     const clientOpts = (clients||[]).map(c => `<option value="${c.id}">${h(c.name)}</option>`).join('');
     openModal('Confirm Order',
       `<div style="margin-bottom:16px">
         <label style="display:block;margin-bottom:6px;font-weight:600">Select Client</label>
         <select id="order-client" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"
-          ${dataChangeEl('toggleDisabledByValue', 'confirm-order-btn')}>
+          ${dataChangeEl('onOrderClientChange', 'confirm-order-btn')}>
           <option value="">— Select a client —</option>
           ${clientOpts}
         </select>
       </div>
+      <div id="order-loc-wrap"></div>
       ${summary}`,
       `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
        <button id="confirm-order-btn" class="btn btn-gold" ${dataAct('confirmOrder')} disabled>Confirm & Submit</button>`
@@ -1206,6 +1261,7 @@ async function confirmOrder(saveAsDraft) {
   const orderType = APP._orderType || 'Regular';
   const needByDate = document.getElementById('cart-need-by')?.value || '';
   const orderPeriod = document.getElementById('cart-order-period')?.value || '';
+  const locationId = document.getElementById('order-location')?.value || '';
   const result = await api('/orders', {
     method: 'POST',
     body: JSON.stringify({
@@ -1217,6 +1273,7 @@ async function confirmOrder(saveAsDraft) {
       ...(APP._orderImage ? { image: APP._orderImage } : {}),
       ...(needByDate ? { need_by_date: needByDate } : {}),
       ...(orderPeriod ? { order_period: orderPeriod } : {}),
+      ...(locationId ? { location_id: locationId } : {}),
       ...(saveAsDraft ? { save_as_draft: true } : {}),
     }),
   });
@@ -1243,8 +1300,10 @@ async function saveDraft() {
     <div class="cart-row cart-total" style="margin-bottom:8px"><span>Grand Total</span><span>${fmt(grand)}</span></div>
     <p style="font-size:.85rem;color:var(--text-muted)">${APP.cart.length} item type(s) · ${APP.cart.reduce((s,i)=>s+i.qty,0)} units</p>`;
   if (isClientRole) {
+    const locs = await loadOrderLocations(APP.user.client_id);
+    const picker = orderLocationPickerHTML(locs, 'order-location');
     openModal('Save as Draft',
-      `<p style="color:var(--text-muted);margin-bottom:12px">Draft will be saved to My Orders. You can submit it later.</p>${summary}`,
+      `<p style="color:var(--text-muted);margin-bottom:12px">Draft will be saved to My Orders. You can submit it later.</p>${picker}${summary}`,
       `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
        <button class="btn btn-gold" ${dataAct('confirmOrder', true)}>Save Draft</button>`);
   } else {
@@ -1254,11 +1313,12 @@ async function saveDraft() {
       `<div style="margin-bottom:16px">
         <label style="display:block;margin-bottom:6px;font-weight:600">Select Client</label>
         <select id="order-client" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"
-          ${dataChangeEl('toggleDisabledByValue', 'save-draft-btn')}>
+          ${dataChangeEl('onOrderClientChange', 'save-draft-btn')}>
           <option value="">— Select a client —</option>
           ${clientOpts}
         </select>
-      </div>${summary}`,
+      </div>
+      <div id="order-loc-wrap"></div>${summary}`,
       `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
        <button id="save-draft-btn" class="btn btn-gold" ${dataAct('confirmOrder', true)} disabled>Save Draft</button>`);
   }

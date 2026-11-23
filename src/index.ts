@@ -7306,6 +7306,7 @@ export default {
       if (path.match(/^\/api\/clients\/[^/]+\/budget$/) && method==="GET") return handleClientBudget(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/catalog$/) && method==="GET")    return handleGetClientCatalog(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/locations$/) && method==="GET")  return handleListClientLocations(request,env,path);
+      if (path.match(/^\/api\/clients\/[^/]+\/order-locations$/) && method==="GET") return handleOrderLocations(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/locations$/) && method==="POST") return handleAddClientLocation(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/locations\/[^/]+$/) && method==="PATCH") return handlePatchClientLocation(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/rename$/) && method==="POST") return handleRenameClient(request,env,path);
@@ -9033,6 +9034,7 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
   // in ensureFeatureTables never ran) can still accept an order instead of 500-ing.
   try { await env.DB.prepare("ALTER TABLE orders ADD COLUMN order_reference TEXT").run(); } catch { /* exists */ }
   try { await env.DB.prepare("ALTER TABLE orders ADD COLUMN order_period TEXT").run(); } catch { /* exists */ }
+  try { await env.DB.prepare("ALTER TABLE orders ADD COLUMN location_id TEXT").run(); } catch { /* exists */ } // P2c
 
   const body = await request.json() as {
     client_id: string;
@@ -9044,6 +9046,7 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
     image?: string;
     order_period?: string;
     order_reference?: string;
+    location_id?: string;
   };
   const orderImage = body.image && body.image.startsWith("data:image/") && body.image.length <= 1_500_000 ? body.image : null;
   // Order period (YYYY-MM) — the business month this order is FOR; default to current month
@@ -9055,6 +9058,21 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
     body.client_id = user!.client_id;
   }
   if (!body.client_id || !body.items?.length) return json({error:"client_id and items required"}, 400);
+
+  // P2c: resolve the ship-to location for a multi-location client. Honour an
+  // explicit, valid location for this client; otherwise fall back to the client's
+  // default location so every order is tagged. Defensive — never blocks an order.
+  let locationId: string | null = null;
+  try {
+    const locs = (await env.DB.prepare(
+      "SELECT id, is_default FROM client_locations WHERE client_id=? AND active=1 ORDER BY is_default DESC, created_at ASC"
+    ).bind(body.client_id).all()).results as Array<{ id: string; is_default: number }>;
+    if (locs.length) {
+      const want = typeof body.location_id === "string" ? body.location_id.trim() : "";
+      const chosen = (want && locs.find((l) => l.id === want)) || locs.find((l) => l.is_default) || locs[0];
+      locationId = chosen ? chosen.id : null;
+    }
+  } catch { /* locations table optional on legacy DBs */ }
   // Order reference (the client's own PO / reference) — mandatory when a client
   // places the order; optional for an ops-placed order on the client's behalf.
   // The order reference is no longer typed by the client. It is auto-generated:
@@ -9075,8 +9093,8 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
     const validTypes = ['Regular','Urgent','Ad-Hoc'];
     const orderType = validTypes.includes(body.order_type||'') ? body.order_type! : 'Regular';
     const needByDate = body.need_by_date || null;
-    await env.DB.prepare(`INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type,need_by_date,order_image,order_period,order_reference) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-      .bind(id, body.client_id, user!.sub, "DRAFT", subtotal, gst, grand_total, body.notes||null, orderType, needByDate, orderImage, orderPeriod, effRef).run();
+    await env.DB.prepare(`INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type,need_by_date,order_image,order_period,order_reference,location_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .bind(id, body.client_id, user!.sub, "DRAFT", subtotal, gst, grand_total, body.notes||null, orderType, needByDate, orderImage, orderPeriod, effRef, locationId).run();
     for (const item of body.items) {
       await env.DB.prepare(`INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total,item_note) VALUES (?,?,?,?,?,?,?,?)`)
         .bind(uid(), id, item.sku, item.name, item.qty, item.unit_price, item.qty*item.unit_price, item.note||null).run();
@@ -9107,8 +9125,8 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
   else if (rule?.auto_approve) status = "APPROVED";
   else if (grand_total > (rule?.min_amount as number || 100000)) status = "PENDING_APPROVAL";
 
-  await env.DB.prepare(`INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type,need_by_date,order_image,order_period,order_reference) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-    .bind(id, body.client_id, user!.sub, status, subtotal, gst, grand_total, body.notes||null, orderType, needByDate, orderImage, orderPeriod, effRef).run();
+  await env.DB.prepare(`INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type,need_by_date,order_image,order_period,order_reference,location_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .bind(id, body.client_id, user!.sub, status, subtotal, gst, grand_total, body.notes||null, orderType, needByDate, orderImage, orderPeriod, effRef, locationId).run();
 
   for (const item of body.items) {
     await env.DB.prepare(`INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total,item_note) VALUES (?,?,?,?,?,?,?,?)`)
@@ -12762,6 +12780,25 @@ async function handleListClientLocations(request: Request, env: Env, path: strin
     name: client.name || null, display_name: client.display_name || null, legal_name: client.legal_name || null,
     billing_address: client.address || null, gstin: client.gstin || null, locations: results,
   });
+}
+
+// GET /api/clients/:id/order-locations — active ship-to locations for the order
+// form (P2c). Readable by anyone who may place an order for this client: internal
+// ops roles for any client, or a client user for their own linked client only.
+async function handleOrderLocations(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  await ensureClientLocationSchema(env);
+  const id = path.split("/").slice(-2)[0];
+  const isClientRole = ["client_admin", "client_user", "client_approver"].includes(user!.role);
+  if (isClientRole && user!.client_id !== id) return json({ error: "Forbidden" }, 403);
+  const client = await env.DB.prepare("SELECT id,name,display_name,legal_name,address,contact_name,contact_phone,gstin FROM clients WHERE id=?").bind(id).first() as Record<string, unknown> | null;
+  if (!client) return json({ error: "Client not found" }, 404);
+  await ensureDefaultLocation(env, client);
+  const { results } = await env.DB.prepare(
+    "SELECT id,display_name,shipping_address,is_default FROM client_locations WHERE client_id=? AND active=1 ORDER BY is_default DESC, created_at ASC"
+  ).bind(id).all();
+  return json({ client_id: id, locations: results });
 }
 
 // POST /api/clients/:id/locations — add a ship-to location.
