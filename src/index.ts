@@ -18,7 +18,7 @@ import type { ApprovalLeg } from "./quote_access";
 import { recurringOccurrences, istTodayISO, addDaysISO, type RecurrencePlan } from "./recurring";
 import { normName, normDc, clientNameMatches, reconcileDcImport, type OrderLine, type ZohoLine } from "./zoho_dc_import";
 import { accountLabel, clientDisplayLabel } from "./client_account";
-import { planClientSync, zohoAddrText, zohoAddrId, type ZohoContact, type ClientRow, type ExistingLocation } from "./client_sync";
+import { planClientSync, zohoAddrText, zohoAddrId, resolveLocationId, type ZohoContact, type ClientRow, type ExistingLocation } from "./client_sync";
 
 // ── JWT ──────────────────────────────────────────────────────────────
 async function signJWT(payload: object, secret: string): Promise<string> {
@@ -2189,6 +2189,10 @@ async function ensureZohoDCTable(env: Env): Promise<void> {
     "CREATE TABLE IF NOT EXISTS zoho_dc_items ( id INTEGER PRIMARY KEY AUTOINCREMENT, zoho_dc_id TEXT NOT NULL, zoho_item_id TEXT, sku TEXT, name TEXT, qty REAL NOT NULL DEFAULT 0 )"
   ).run().catch(() => {});
   await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_zdci_dc ON zoho_dc_items (zoho_dc_id)").run().catch(() => {});
+  // P2b: the DC's ship-to address, captured during the detail backfill, used to resolve
+  // which client location the delivery is for.
+  await env.DB.prepare("ALTER TABLE zoho_delivery_challans ADD COLUMN ship_address TEXT").run().catch(() => {});
+  await env.DB.prepare("ALTER TABLE zoho_delivery_challans ADD COLUMN ship_address_id TEXT").run().catch(() => {});
   _zdcReady = true;
 }
 
@@ -2383,7 +2387,7 @@ async function zohoDCBackfillDetails(env: Env, fetchImpl: FetchImpl, cap: number
        ORDER BY dc_date DESC, dc_number DESC LIMIT ?`
   ).bind(...(minYm ? [minYm, cap] : [cap])).all();
   const up = env.DB.prepare(
-    "UPDATE zoho_delivery_challans SET line_count=?, qty_count=?, invoice_numbers=?, detail_ok=1, synced_at=? WHERE zoho_dc_id=?"
+    "UPDATE zoho_delivery_challans SET line_count=?, qty_count=?, invoice_numbers=?, ship_address=?, ship_address_id=?, detail_ok=1, synced_at=? WHERE zoho_dc_id=?"
   );
   const writes: D1PreparedStatement[] = [];
   const flush = async () => {
@@ -2413,7 +2417,9 @@ async function zohoDCBackfillDetails(env: Env, fetchImpl: FetchImpl, cap: number
     const lineCount = lines.length;
     const qtyCount = lines.reduce((s: number, li) => s + (Number((li as { quantity?: unknown }).quantity ?? 0) || 0), 0);
     const invoiceNos = zohoDcInvoiceNumbers(detail, {});
-    writes.push(up.bind(lineCount, qtyCount, JSON.stringify(invoiceNos), stamp, id));
+    const shipA = zohoAddrText(detail?.shipping_address as Record<string, unknown>);
+    const shipId = zohoAddrId(detail?.shipping_address as Record<string, unknown>);
+    writes.push(up.bind(lineCount, qtyCount, JSON.stringify(invoiceNos), shipA, shipId, stamp, id));
     writes.push(...zohoDcItemStmts(env, id, lines)); // persist the line items for order import
     r.detailed_now++; processed++;
     if (writes.length >= ZOHO_DC.WRITE_CHUNK) await flush();
@@ -2446,8 +2452,8 @@ async function zohoDCDetailByIds(env: Env, fetchImpl: FetchImpl, ids: string[], 
     const qty = lines.reduce((s: number, li) => s + (Number((li as { quantity?: unknown }).quantity ?? 0) || 0), 0);
     try {
       await env.DB.prepare(
-        "UPDATE zoho_delivery_challans SET line_count=?, qty_count=?, invoice_numbers=?, detail_ok=1, synced_at=? WHERE zoho_dc_id=?"
-      ).bind(lines.length, qty, JSON.stringify(zohoDcInvoiceNumbers(detail, {})), stamp, id).run();
+        "UPDATE zoho_delivery_challans SET line_count=?, qty_count=?, invoice_numbers=?, ship_address=?, ship_address_id=?, detail_ok=1, synced_at=? WHERE zoho_dc_id=?"
+      ).bind(lines.length, qty, JSON.stringify(zohoDcInvoiceNumbers(detail, {})), zohoAddrText(detail?.shipping_address as Record<string, unknown>), zohoAddrId(detail?.shipping_address as Record<string, unknown>), stamp, id).run();
       await env.DB.batch(zohoDcItemStmts(env, id, lines)).catch(() => {}); // persist line items for order import
       r.detailed_now++;
     } catch (e) { r.failed++; if (r.errors.length < 50) r.errors.push((e as Error).message); }
@@ -3556,6 +3562,11 @@ async function ensureFeatureTables(env: Env): Promise<void> {
     `ALTER TABLE clients ADD COLUMN display_name TEXT`,
     `ALTER TABLE clients ADD COLUMN legal_name TEXT`,
     `ALTER TABLE clients ADD COLUMN zoho_contact_id TEXT`,
+    // P2b: the ship-to location an order / delivery is for.
+    `ALTER TABLE orders ADD COLUMN location_id TEXT`,
+    `ALTER TABLE delivery_challans ADD COLUMN location_id TEXT`,
+    `ALTER TABLE zoho_delivery_challans ADD COLUMN ship_address TEXT`,
+    `ALTER TABLE zoho_delivery_challans ADD COLUMN ship_address_id TEXT`,
   ];
   for (const sql of [...stmts, ...alters]) { try { await env.DB.prepare(sql).run(); } catch { /* exists / non-fatal */ } }
   // Seed the editable claim-screening dictionaries once (deterministic ids →
@@ -7894,12 +7905,13 @@ async function handleGetOrder(request: Request, env: Env, path: string): Promise
 async function handleClientOrderView(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
+  await ensureClientLocationSchema(env); await ensureDcImportSchema(env); // orders.location_id + client_locations
   const id = path.split("/").slice(-2)[0];
   const order = await env.DB.prepare(
     `SELECT o.id, o.client_id, o.status, o.order_type, o.order_reference, o.order_period, o.revision,
             o.created_at, o.closed_at, o.predicted_delivery_date, o.subtotal, o.gst, o.grand_total,
-            c.name AS client_name
-     FROM orders o LEFT JOIN clients c ON o.client_id=c.id WHERE o.id=?`
+            c.name AS client_name, cl.display_name AS location_name, cl.shipping_address AS location_address
+     FROM orders o LEFT JOIN clients c ON o.client_id=c.id LEFT JOIN client_locations cl ON o.location_id=cl.id WHERE o.id=?`
   ).bind(id).first() as Record<string, unknown> | null;
   if (!order) return json({ error: "Not found" }, 404);
   const cross = await denyClientCrossAccess(env, user!, order.client_id); if (cross) return cross;
@@ -8018,6 +8030,7 @@ async function handleClientOrderView(request: Request, env: Env, path: string): 
     approved_at: approvedRow?.t || null,
     delivered_on: lastDeliv?.d || order.closed_at || null,
     subtotal: order.subtotal, gst: order.gst, grand_total: order.grand_total,
+    delivery_location: order.location_name ? { display_name: order.location_name, shipping_address: order.location_address || null } : null,
     items: lines, challans, timeline, tickets,
   });
 }
@@ -11481,6 +11494,8 @@ async function ensureDcImportSchema(env: Env): Promise<void> {
   await env.DB.prepare(
     "CREATE TABLE IF NOT EXISTS dc_import_log ( id TEXT PRIMARY KEY, order_id TEXT NOT NULL, zoho_dc_id TEXT NOT NULL, dc_number TEXT, actor_id TEXT, actor_name TEXT, outcome TEXT NOT NULL, flags TEXT DEFAULT '[]', created_at TEXT DEFAULT (datetime('now')) )"
   ).run().catch(() => {});
+  await env.DB.prepare("ALTER TABLE orders ADD COLUMN location_id TEXT").run().catch(() => {});           // P2b
+  await env.DB.prepare("ALTER TABLE delivery_challans ADD COLUMN location_id TEXT").run().catch(() => {}); // P2b
   _dcImportReady = true;
 }
 
@@ -11535,6 +11550,24 @@ async function handleZohoDcCandidates(request: Request, env: Env, path: string):
   return json({ order_id: orderId, client_name: clientName, client_label: clientLabel, candidates });
 }
 
+// Resolve which client location a Zoho DC's delivery is for (by Zoho address id, then
+// address text, then the account default). Seeds a default location if the client has none.
+async function resolveDcLocation(env: Env, clientId: string, zohoDcId: string): Promise<{ id: string; display_name: string } | null> {
+  if (!clientId) return null;
+  await ensureClientLocationSchema(env);
+  const client = await env.DB.prepare("SELECT id,name,display_name,legal_name,address,contact_name,contact_phone FROM clients WHERE id=?").bind(clientId).first() as Record<string, unknown> | null;
+  if (!client) return null;
+  await ensureDefaultLocation(env, client);
+  const header = await env.DB.prepare("SELECT ship_address, ship_address_id FROM zoho_delivery_challans WHERE zoho_dc_id=?").bind(zohoDcId).first() as { ship_address?: string; ship_address_id?: string } | null;
+  const { results } = await env.DB.prepare(
+    "SELECT id, zoho_address_id, shipping_address, is_default, display_name FROM client_locations WHERE client_id=? AND active=1 ORDER BY is_default DESC, created_at ASC"
+  ).bind(clientId).all();
+  const locId = resolveLocationId(header?.ship_address_id || "", header?.ship_address || "", results as unknown as { id: string; zoho_address_id?: string | null; shipping_address?: string | null; is_default?: unknown }[]);
+  if (!locId) return null;
+  const loc = (results as Record<string, unknown>[]).find(l => String(l.id) === String(locId));
+  return { id: locId, display_name: loc ? String(loc.display_name || "") : "" };
+}
+
 // Build the reconciliation for one Zoho DC against the order (no writes).
 async function dcImportReconcile(env: Env, order: Record<string, unknown>, zohoDcId: string) {
   const header = await env.DB.prepare(
@@ -11565,9 +11598,10 @@ async function dcImportReconcile(env: Env, order: Record<string, unknown>, zohoD
 
   const lines_detail_ready = Number(header.detail_ok) === 1 && zohoLines.length > 0;
   const can_commit = client_match && !duplicate && lines_detail_ready && recon.totals.matched_lines > 0;
+  const resolved = await resolveDcLocation(env, String(order.client_id || ""), zohoDcId).catch(() => null);
   return {
     header, client_match, duplicate, already_linked, number_exists, duplicate_reason,
-    lines_detail_ready, recon, can_commit,
+    lines_detail_ready, recon, can_commit, resolved,
   };
 }
 
@@ -11589,7 +11623,7 @@ async function handleZohoDcImportPreview(request: Request, env: Env, path: strin
     order_id: orderId, client_name: order.client_name, zoho_dc_id: zohoDcId,
     dc_number: rc.header.dc_number, dc_date: rc.header.dc_date, customer_name: rc.header.customer_name,
     client_match: rc.client_match, duplicate: rc.duplicate, duplicate_reason: rc.duplicate_reason,
-    lines_detail_ready: rc.lines_detail_ready,
+    lines_detail_ready: rc.lines_detail_ready, resolved_location: rc.resolved,
     lines: rc.recon.lines, totals: rc.recon.totals, verdict: rc.recon.verdict, can_commit: rc.can_commit,
   });
 }
@@ -11637,6 +11671,12 @@ async function handleZohoDcImportCommit(request: Request, env: Env, path: string
   for (const l of matched) stmts.push(insItem.bind(uid(), dcId, l.sku, l.name, l.ordered, l.import_qty));
   await env.DB.batch(stmts);
 
+  // Resolve + record which client location this delivery is for (and tag the order).
+  if (rc.resolved) {
+    await env.DB.prepare("UPDATE delivery_challans SET location_id=? WHERE id=?").bind(rc.resolved.id, dcId).run().catch(() => {});
+    await env.DB.prepare("UPDATE orders SET location_id=COALESCE(NULLIF(location_id,''), ?) WHERE id=?").bind(rc.resolved.id, orderId).run().catch(() => {});
+  }
+
   // Settle: close when nothing is outstanding, else move a pre-delivery order to
   // PARTIALLY_CLOSED so its state reflects the recorded delivery.
   let closed = false;
@@ -11662,7 +11702,7 @@ async function handleZohoDcImportCommit(request: Request, env: Env, path: string
   return json({
     dc_id: dcId, dc_number: dcNumber, imported_lines: matched.length, total_qty: totalQty,
     over_qty: rc.recon.totals.over_qty, unmatched_lines: rc.recon.totals.unmatched_lines,
-    order_status: finalStatus?.status || order.status, closed,
+    order_status: finalStatus?.status || order.status, closed, location: rc.resolved,
   }, 201);
 }
 

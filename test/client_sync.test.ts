@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { zohoAddrText, zohoAddrId, matchContactToClient, planContact, planClientSync } from "../src/client_sync";
+import { zohoAddrText, zohoAddrId, matchContactToClient, planContact, planClientSync, resolveLocationId } from "../src/client_sync";
 
 describe("zohoAddrText / zohoAddrId", () => {
   it("composes a one-line address", () => {
@@ -62,6 +62,25 @@ describe("planContact", () => {
     const p = planContact({ zoho_contact_id: "z", name: "Acme  Foods", addresses: [] },
       { id: "c1", name: "acme foods" }, []);
     expect(p.name_differs).toBe(false);
+  });
+});
+
+describe("resolveLocationId", () => {
+  const locs = [
+    { id: "l1", zoho_address_id: "a1", shipping_address: "Manyata, Bengaluru", is_default: 1 },
+    { id: "l2", zoho_address_id: "a2", shipping_address: "Bagmane, Bengaluru", is_default: 0 },
+  ];
+  it("matches by zoho address id first", () => {
+    expect(resolveLocationId("a2", "whatever", locs)).toBe("l2");
+  });
+  it("falls back to normalized address text", () => {
+    expect(resolveLocationId(null, "bagmane,  bengaluru", locs)).toBe("l2");
+  });
+  it("falls back to the default location", () => {
+    expect(resolveLocationId("zzz", "nowhere", locs)).toBe("l1");
+  });
+  it("null when the client has no locations", () => {
+    expect(resolveLocationId("a1", "x", [])).toBe(null);
   });
 });
 

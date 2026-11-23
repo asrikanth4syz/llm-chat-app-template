@@ -158,6 +158,29 @@ describe("Zoho DC import — bulk worklist", () => {
   });
 });
 
+describe("Zoho DC import — location resolution (P2b)", () => {
+  it("resolves the ship-to location by Zoho address id and tags the DC + order", async () => {
+    const d = db();
+    for (const sql of [
+      "ALTER TABLE zoho_delivery_challans ADD COLUMN ship_address TEXT",
+      "ALTER TABLE zoho_delivery_challans ADD COLUMN ship_address_id TEXT",
+      "ALTER TABLE orders ADD COLUMN location_id TEXT",
+      "ALTER TABLE delivery_challans ADD COLUMN location_id TEXT",
+    ]) await d.prepare(sql).run().catch(() => {});
+    await d.prepare("CREATE TABLE IF NOT EXISTS client_locations ( id TEXT PRIMARY KEY, client_id TEXT NOT NULL, display_name TEXT NOT NULL, shipping_address TEXT, contact_name TEXT, contact_phone TEXT, zoho_address_id TEXT, is_default INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, created_at TEXT DEFAULT (datetime('now')) )").run();
+    await d.prepare("INSERT OR IGNORE INTO client_locations (id,client_id,display_name,shipping_address,zoho_address_id,is_default,active) VALUES ('loc-m','cZ','ServiceNow · Manyata','Manyata','addr-m',1,1)").run();
+    await d.prepare("INSERT OR IGNORE INTO client_locations (id,client_id,display_name,shipping_address,zoho_address_id,is_default,active) VALUES ('loc-b','cZ','ServiceNow · Bagmane','Bagmane','addr-b',0,1)").run();
+    await d.prepare("UPDATE zoho_delivery_challans SET ship_address='Bagmane', ship_address_id='addr-b' WHERE zoho_dc_id='z1'").run();
+
+    const r = await (await post("/api/orders/OZ/zoho-dc-import/commit", { zoho_dc_id: "z1", confirm: true }, saTok)).json() as any;
+    expect(r.location.id).toBe("loc-b"); // not the default (loc-m)
+    const dc = await d.prepare("SELECT location_id FROM delivery_challans WHERE zoho_dc_id='z1'").first() as any;
+    expect(dc.location_id).toBe("loc-b");
+    const ord = await d.prepare("SELECT location_id FROM orders WHERE id='OZ'").first() as any;
+    expect(ord.location_id).toBe("loc-b");
+  });
+});
+
 describe("Zoho DC import — per-line settlement", () => {
   it("keeps the order PARTIALLY_CLOSED when an over-delivery on one SKU leaves another due", async () => {
     // OZ3 ordered A60 + C100; z6 delivers A160 (over). Order-total would read settled

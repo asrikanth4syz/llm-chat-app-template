@@ -1778,7 +1778,7 @@ async function zohoDcImportPreview(id, zohoId) {
   const footer = `<button class="btn btn-secondary" ${dataAct('zohoDcImportStart', id)}>← Back</button>` +
     (p.can_commit ? `<button class="btn btn-primary" ${dataAct('zohoDcImportCommit', id, zohoId)}>Confirm &amp; import</button>` : `<button class="btn btn-primary" disabled title="Resolve the flagged issues to import">Import</button>`);
   openModal(`Import ${h(String(p.dc_number || ''))}`, `
-    <div class="u-muted" style="font-size:.82rem;margin-bottom:8px">Zoho customer <b>${h(p.customer_name || '')}</b> · order client <b>${h(p.client_name || '')}</b> · DC date ${h(p.dc_date || '—')}</div>
+    <div class="u-muted" style="font-size:.82rem;margin-bottom:8px">Zoho customer <b>${h(p.customer_name || '')}</b> · order client <b>${h(p.client_name || '')}</b> · DC date ${h(p.dc_date || '—')}${p.resolved_location && p.resolved_location.display_name ? ` · delivering to <b>${h(p.resolved_location.display_name)}</b>` : ''}</div>
     ${banners.join('')}
     <div style="overflow-x:auto"><table class="table" style="font-size:.84rem;margin:0"><thead><tr><th>Item</th><th class="u-right">Ordered</th><th class="u-right">Delivering</th><th class="u-right">Due</th><th>Status</th></tr></thead><tbody>${rowHtml || '<tr><td colspan="5" class="u-muted" style="padding:14px;text-align:center">No line items on this challan.</td></tr>'}</tbody></table></div>`, footer);
 }
@@ -2351,7 +2351,7 @@ async function renderClientOrder(el) {
         <button class="btn btn-secondary btn-sm" ${dataAct('clientOrderTicket', o.id, 'issue')}>Report an issue</button>
         <button class="btn btn-secondary btn-sm" ${dataAct('clientOrderTicket', o.id, 'support')}>Contact support</button>
       </div>
-      <div class="co-meta">${h(o.order_type || 'Regular')} · Placed ${fmtDate(o.created_at)}${period ? ' · ' + period : ''}${o.client_name ? ' · ' + h(o.client_name) : ''}${ref ? ' · Ref ' + ref : ''}</div>
+      <div class="co-meta">${h(o.order_type || 'Regular')} · Placed ${fmtDate(o.created_at)}${period ? ' · ' + period : ''}${o.client_name ? ' · ' + h(o.client_name) : ''}${o.delivery_location && o.delivery_location.display_name ? ' · 📍 ' + h(o.delivery_location.display_name) : ''}${ref ? ' · Ref ' + ref : ''}</div>
     </section>
 
     ${amendReviewHtml}

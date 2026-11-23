@@ -89,3 +89,28 @@ export function planClientSync(
     return planContact(z, client, existing);
   });
 }
+
+export interface ResolvableLocation { id: string; zoho_address_id?: string | null; shipping_address?: string | null; is_default?: unknown; }
+
+// Resolve a delivery's ship-to location among a client's locations:
+//   1) exact Zoho address id, 2) normalized shipping-address text, 3) the default,
+//   4) the only/first location. Returns null when the client has no locations.
+export function resolveLocationId(
+  shipAddressId: string | null | undefined,
+  shipAddressText: string | null | undefined,
+  locations: ResolvableLocation[],
+): string | null {
+  const locs = locations || [];
+  if (!locs.length) return null;
+  if (shipAddressId) {
+    const byId = locs.find(l => l.zoho_address_id && String(l.zoho_address_id) === String(shipAddressId));
+    if (byId) return byId.id;
+  }
+  const t = normName(shipAddressText);
+  if (t) {
+    const byText = locs.find(l => l.shipping_address && normName(l.shipping_address) === t);
+    if (byText) return byText.id;
+  }
+  const def = locs.find(l => Number(l.is_default) === 1);
+  return (def || locs[0]).id;
+}
