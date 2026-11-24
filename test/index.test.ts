@@ -4,7 +4,7 @@ import { describe, it, expect, beforeAll } from "vitest";
 import {
   istToday, daysBetweenIST, overdueDays, toPaise, fromPaise, formatMoney,
   agingBucket, selectTier, computeDSO, ensureArSchema, DEFAULT_TIER_RULES, SEND_CRON,
-  BOOKS_SYNC_CRON, runBooksScheduledDelta,
+  BOOKS_SYNC_CRON, CONTACT_SYNC_CRON, runBooksScheduledDelta,
 } from "../src/index";
 // Slice 1, Group 2 — Books mirror.
 import {
@@ -3789,6 +3789,9 @@ describe("finance-ar/1.D schema self-heal", () => {
   });
   it("BOOKS_SYNC_CRON is the 23:00 IST (17:30 UTC) nightly expression", () => {
     expect(BOOKS_SYNC_CRON).toBe("30 17 * * *");
+  });
+  it("CONTACT_SYNC_CRON is the 22:00 IST (16:30 UTC) nightly expression", () => {
+    expect(CONTACT_SYNC_CRON).toBe("30 16 * * *");
   });
   it("nightly Books delta no-ops while disabled or backfill-pending (no network, no error written)", async () => {
     await ensureArSchema(env);

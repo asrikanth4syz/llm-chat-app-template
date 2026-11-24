@@ -90,3 +90,14 @@ describe("create order with a chosen location (P2c)", () => {
     expect(o.location_id).toBe("locBAG");
   });
 });
+
+describe("orders list exposes the client display name", () => {
+  it("returns client_display_name alongside the legal client_name", async () => {
+    await db().prepare("UPDATE clients SET display_name='ServiceNow' WHERE id='cM'").run();
+    const r = await (await post("/api/orders", { client_id: "cM", items }, opsTok)).json() as any;
+    const list = await (await get("/api/orders", opsTok)).json() as any[];
+    const row = list.find((o) => o.id === r.id);
+    expect(row.client_name).toBe("ServiceNow India");      // legal name
+    expect(row.client_display_name).toBe("ServiceNow");     // short display name
+  });
+});

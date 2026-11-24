@@ -30,7 +30,9 @@
 		//   must stay byte-identical to the SEND_CRON constant in src/index.ts).
 		// "0 4 * * *": 04:00 UTC = 09:30 IST — nightly recurring-order generation
 		//   (RECURRING_CRON; must stay byte-identical to the constant in src/index.ts).
-		"crons": ["30 17 * * *", "30 3 * * *", "30 2 * * *", "0 4 * * *"]
+		// "30 16 * * *": 16:30 UTC = 22:00 IST — nightly Zoho contact (client master) mirror
+		//   refresh (CONTACT_SYNC_CRON; must stay byte-identical to the constant in src/index.ts).
+		"crons": ["30 17 * * *", "30 3 * * *", "30 2 * * *", "0 4 * * *", "30 16 * * *"]
 	},
 	"upload_source_maps": true,
 	"d1_databases": [

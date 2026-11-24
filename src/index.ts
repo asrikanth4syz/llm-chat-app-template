@@ -4072,6 +4072,12 @@ const BOOKS_SYNC_CRON = "30 17 * * *";
 // Nightly recurring-order generation. 09:30 IST = 04:00 UTC. Must stay byte-identical
 // to the matching wrangler.jsonc trigger — scheduled() branches on this literal.
 const RECURRING_CRON = "0 4 * * *";
+// Nightly Zoho contact (client master) mirror refresh. 22:00 IST = 16:30 UTC. Must stay
+// byte-identical to the matching wrangler.jsonc trigger — scheduled() branches on this
+// literal. Read-only to the clients table: it only refreshes the zoho_contacts mirror so
+// the manual Sync-from-Zoho review stays current; applying names/locations is still a
+// super-admin action in the review screen.
+const CONTACT_SYNC_CRON = "30 16 * * *";
 // Batch bound for the daily reminder pass (continuation cursor across ticks).
 const MAX_CUSTOMERS_PER_RUN = 200;
 
@@ -5160,7 +5166,8 @@ export { currentFY, dcClassForCategory, allocateDCSeriesNumber, migrateSeedDCSer
 // Phase 3 Finance foundations (Slice 1, Group 1) — pure, unit-tested in isolation.
 export { istToday, daysBetweenIST, overdueDays, toPaise, fromPaise, formatMoney,
          agingBucket, selectTier, computeDSO, ensureArSchema, DEFAULT_TIER_RULES,
-         SEND_CRON, BOOKS_SYNC_CRON, runBooksScheduledDelta, resolveEffectiveDue, addDaysIST, computeArKpis, _arLedger, indianFYRange };
+         SEND_CRON, BOOKS_SYNC_CRON, CONTACT_SYNC_CRON, runBooksScheduledDelta, resolveEffectiveDue, addDaysIST, computeArKpis, _arLedger, indianFYRange };
+export { runZohoContactSync };
 
 // ============================================================================
 // Milestone 006 — Quotations: entitlement gate (Slice 2).
@@ -7069,6 +7076,14 @@ export default {
         catch (e) { console.error("books nightly delta cron error:", String(e)); }
         return;
       }
+      // Nightly Zoho contact (client master) mirror refresh (22:00 IST). Keeps the
+      // zoho_contacts mirror current so the manual Sync-from-Zoho review has fresh data;
+      // read-only to the clients table and self-gating (no-op until Zoho secrets are set).
+      if ((controller.cron || "") === CONTACT_SYNC_CRON) {
+        try { const r = await runZohoContactSync(env); console.log("zoho contact sync:", JSON.stringify(r)); }
+        catch (e) { console.error("zoho contact sync cron error:", String(e)); }
+        return;
+      }
       await fixCategoryNames(env); // make sure columns/tables exist first
       await runDeliveryReminders(env);
       // Zoho Inventory pull (milestone 002). Disabled + dry-run by default, so this
@@ -7799,13 +7814,14 @@ async function handleListOrders(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user);
   if (denied) return denied;
+  await ensureClientLocationSchema(env); // clients.display_name (runtime-only column)
 
   const url = new URL(request.url);
   const status = url.searchParams.get("status");
   const clientId = url.searchParams.get("client_id");
   const q = url.searchParams.get("q");
 
-  let query = `SELECT o.*,c.name as client_name,u.name as creator_name,
+  let query = `SELECT o.*,c.name as client_name,c.display_name AS client_display_name,u.name as creator_name,
     COALESCE(NULLIF(c.pan,''), NULLIF(SUBSTR(c.gstin,3,10),''), o.client_id) AS company_key,
     (SELECT COUNT(*) FROM order_items WHERE order_id=o.id) AS item_count,
     (SELECT COALESCE(SUM(qty),0) FROM order_items WHERE order_id=o.id) AS total_qty,

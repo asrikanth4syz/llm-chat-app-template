@@ -3591,6 +3591,18 @@ function openOrderDelivery(id, view) {
   navigate('order_view', { tab: id + '.delivery' + (view ? '.' + view : '') });
 }
 
+// Order Queue "Client" cell: show the client's display (short) name first and the
+// legal name beneath it. Falls back to the legal name alone when there's no distinct
+// display name.
+function oqClientCell(o) {
+  const disp = (o.client_display_name || '').trim();
+  const legal = (o.client_name || '').trim();
+  if (disp && disp !== legal) {
+    return `<div style="font-weight:700;color:var(--navy)">${h(disp)}</div><div class="u-muted" style="font-size:.74rem">${h(legal)}</div>`;
+  }
+  return h(legal || '—');
+}
+
 async function renderOrderQueue(el) {
   const orders = await api('/orders');
   if (!orders) return;
@@ -3713,7 +3725,7 @@ async function renderOrderQueue(el) {
           ${o.predicted_delivery_date && !['CLOSED','DELIVERED','CANCELLED'].includes(o.status) ? `<div style="font-size:.7rem;color:${o.predicted_delivery_date<todayStr?'var(--danger)':'var(--success)'};margin-top:1px">📅 Est. ${fmtDate(o.predicted_delivery_date)}</div>` : ''}
         </td>
         <td data-label="Monthly index">${oqIndexBadge(o)}</td>
-        <td data-label="Client">${o.client_name||'—'}</td>
+        <td data-label="Client">${oqClientCell(o)}</td>
         <td data-label="Amount" style="font-weight:700">${fmt(o.grand_total)}</td>
         <td data-label="Status">${statusBadge(o.status)}${oqDeliveryBadge(o)}</td>
         <td data-label="Delivery">${oqProgressCell(o)}</td>
