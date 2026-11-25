@@ -7342,6 +7342,7 @@ export default {
       if (path.match(/^\/api\/tickets\/[^/]+\/comments$/) && method==="POST") return handleAddTicketComment(request,env,path);
 
       // Users
+      if (path==="/api/client-locations"        && method==="GET")   return handleAllClientLocations(request,env);
       if (path==="/api/users"                   && method==="GET")   return handleListUsers(request,env);
       if (path==="/api/users"                   && method==="POST")  return handleCreateUser(request,env);
       if (path.match(/^\/api\/users\/[^/]+$/)   && method==="PATCH") return handlePatchUser(request,env,path);
@@ -7727,10 +7728,19 @@ async function handleOTPVerify(request: Request, env: Env): Promise<Response> {
 }
 
 async function issueToken(row: Record<string,string>, env: Env): Promise<Response> {
+  let locationName = "";
+  if (row.location_id) {
+    try {
+      const l = await env.DB.prepare("SELECT display_name FROM client_locations WHERE id=?").bind(row.location_id).first() as {display_name?:string}|null;
+      if (l?.display_name) locationName = l.display_name;
+    } catch { /* client_locations may not exist on a legacy DB */ }
+  }
   const payload: JWTPayload = {
     sub: row.id, email: row.email, role: row.role,
     name: row.name, org: row.org, initials: row.initials,
     ...(row.client_id ? { client_id: row.client_id } : {}),
+    ...(row.location_id ? { location_id: row.location_id } : {}),
+    ...(locationName ? { location_name: locationName } : {}),
     iat: Math.floor(Date.now()/1000), exp: Math.floor(Date.now()/1000) + 86400*7,
   };
   const token = await signJWT(payload, env.JWT_SECRET);
@@ -7748,6 +7758,14 @@ async function handleMe(request: Request, env: Env): Promise<Response> {
       const c = await env.DB.prepare("SELECT name FROM clients WHERE id=?").bind(user.client_id).first() as {name?:string}|null;
       if (c?.name) user.org = c.name;
     } catch { /* clients row missing — keep token value */ }
+  }
+  // Keep the location display name live too, so an edited location name shows
+  // everywhere without a re-login (references are by id, not name).
+  if (user.location_id) {
+    try {
+      const l = await env.DB.prepare("SELECT display_name FROM client_locations WHERE id=?").bind(user.location_id).first() as {display_name?:string}|null;
+      if (l?.display_name) user.location_name = l.display_name;
+    } catch { /* client_locations missing — keep token value */ }
   }
   return json({user});
 }
@@ -12765,7 +12783,33 @@ async function ensureClientLocationSchema(env: Env): Promise<void> {
   await env.DB.prepare("ALTER TABLE clients ADD COLUMN zoho_contact_id TEXT").run().catch(() => {});
   await env.DB.prepare("CREATE TABLE IF NOT EXISTS client_locations ( id TEXT PRIMARY KEY, client_id TEXT NOT NULL, display_name TEXT NOT NULL, shipping_address TEXT, contact_name TEXT, contact_phone TEXT, zoho_address_id TEXT, is_default INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, created_at TEXT DEFAULT (datetime('now')) )").run().catch(() => {});
   await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_client_locations_client ON client_locations (client_id)").run().catch(() => {});
+  // A location's display name is unique within its client (best-effort at the DB level;
+  // the add/patch handlers also enforce it so the guarantee holds even if legacy dupes
+  // keep this index from being created).
+  await env.DB.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_client_locations_disp ON client_locations (client_id, display_name)").run().catch(() => {});
+  // A user belongs to a specific client location, not just the client.
+  await env.DB.prepare("ALTER TABLE users ADD COLUMN location_id TEXT").run().catch(() => {});
   _clientLocReady = true;
+}
+
+// One-time backfill: link existing client-role users to their client's default location
+// where they have a client but no location yet. Guarded so it runs once per isolate.
+let _userLocBackfilled = false;
+async function ensureUserLocationBackfill(env: Env): Promise<void> {
+  if (_userLocBackfilled) return;
+  await ensureClientLocationSchema(env);
+  try {
+    await env.DB.prepare(
+      `UPDATE users SET location_id = (
+         SELECT cl.id FROM client_locations cl
+         WHERE cl.client_id = users.client_id
+         ORDER BY cl.is_default DESC, cl.created_at ASC LIMIT 1)
+       WHERE client_id IS NOT NULL AND client_id <> ''
+         AND (location_id IS NULL OR location_id = '')
+         AND EXISTS (SELECT 1 FROM client_locations cl2 WHERE cl2.client_id = users.client_id)`
+    ).run();
+  } catch { /* best-effort; new users get a location at creation */ }
+  _userLocBackfilled = true;
 }
 
 // Non-destructive migration: seed a default ship-to location from the client's current
@@ -12817,6 +12861,35 @@ async function handleOrderLocations(request: Request, env: Env, path: string): P
   return json({ client_id: id, locations: results });
 }
 
+// GET /api/client-locations — every active location across active clients, each with
+// its client name, for the Add/Edit User location picker. Admin-only (user management).
+// Ensures each active client has at least its default location so new clients appear.
+async function handleAllClientLocations(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!CLIENT_ADMIN_ROLES.includes(user!.role)) return json({ error: "Forbidden" }, 403);
+  await ensureClientLocationSchema(env);
+  const { results: clients } = await env.DB.prepare("SELECT id,name,display_name,legal_name,address,contact_name,contact_phone FROM clients WHERE active=1").all() as { results: Record<string, unknown>[] };
+  for (const c of clients) await ensureDefaultLocation(env, c);
+  const { results } = await env.DB.prepare(
+    `SELECT cl.id, cl.client_id, cl.display_name, cl.is_default, c.name AS client_name, c.display_name AS client_display_name
+       FROM client_locations cl JOIN clients c ON c.id = cl.client_id
+      WHERE cl.active = 1 AND c.active = 1
+      ORDER BY c.name COLLATE NOCASE, cl.is_default DESC, cl.display_name COLLATE NOCASE`
+  ).all();
+  return json({ locations: results });
+}
+
+// Resolve a client-location id to its client + names, for linking a user to a location.
+async function resolveUserLocation(env: Env, locationId: string): Promise<{ location_id: string; client_id: string; client_name: string; location_name: string } | null> {
+  const row = await env.DB.prepare(
+    `SELECT cl.id AS location_id, cl.client_id, cl.display_name AS location_name, c.name AS client_name
+       FROM client_locations cl JOIN clients c ON c.id = cl.client_id
+      WHERE cl.id = ? AND cl.active = 1 AND c.active = 1`
+  ).bind(locationId).first() as { location_id: string; client_id: string; client_name: string; location_name: string } | null;
+  return row || null;
+}
+
 // POST /api/clients/:id/locations — add a ship-to location.
 async function handleAddClientLocation(request: Request, env: Env, path: string): Promise<Response> {
   const user = await getUser(request, env);
@@ -12829,6 +12902,8 @@ async function handleAddClientLocation(request: Request, env: Env, path: string)
   const body = await request.json().catch(() => ({})) as Record<string, unknown>;
   const display = String(body.display_name || "").trim();
   if (!display) return json({ error: "A display name is required." }, 400);
+  const dup = await env.DB.prepare("SELECT id FROM client_locations WHERE client_id=? AND lower(display_name)=lower(?)").bind(id, display).first() as { id?: string } | null;
+  if (dup?.id) return json({ error: "Another location of this client already uses that display name." }, 409);
   const existing = await env.DB.prepare("SELECT COUNT(*) AS n FROM client_locations WHERE client_id=?").bind(id).first() as { n?: number } | null;
   const isDefault = (body.is_default === true || Number(body.is_default) === 1 || (existing?.n || 0) === 0) ? 1 : 0;
   if (isDefault) await env.DB.prepare("UPDATE client_locations SET is_default=0 WHERE client_id=?").bind(id).run();
@@ -12856,7 +12931,13 @@ async function handlePatchClientLocation(request: Request, env: Env, path: strin
     await env.DB.prepare("UPDATE client_locations SET is_default=1 WHERE id=?").bind(locId).run();
   }
   const fields: string[] = [], vals: unknown[] = [];
-  if (body.display_name !== undefined) { const d = String(body.display_name || "").trim(); if (!d) return json({ error: "Display name cannot be blank." }, 400); fields.push("display_name=?"); vals.push(d); }
+  if (body.display_name !== undefined) {
+    const d = String(body.display_name || "").trim();
+    if (!d) return json({ error: "Display name cannot be blank." }, 400);
+    const dup = await env.DB.prepare("SELECT id FROM client_locations WHERE client_id=? AND lower(display_name)=lower(?) AND id<>?").bind(id, d, locId).first() as { id?: string } | null;
+    if (dup?.id) return json({ error: "Another location of this client already uses that display name." }, 409);
+    fields.push("display_name=?"); vals.push(d);
+  }
   if (body.shipping_address !== undefined) { fields.push("shipping_address=?"); vals.push(String(body.shipping_address || "")); }
   if (body.contact_name !== undefined) { fields.push("contact_name=?"); vals.push(String(body.contact_name || "")); }
   if (body.contact_phone !== undefined) { fields.push("contact_phone=?"); vals.push(String(body.contact_phone || "")); }
@@ -13404,7 +13485,15 @@ async function handlePatchTicket(request: Request, env: Env, path: string): Prom
 async function handleListUsers(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user); if (denied) return denied;
-  const {results} = await env.DB.prepare("SELECT id,email,role,name,org,initials,active,created_at,client_id FROM users ORDER BY name").all();
+  await ensureUserLocationBackfill(env);
+  const {results} = await env.DB.prepare(
+    `SELECT u.id,u.email,u.role,u.name,u.org,u.initials,u.active,u.two_fa_enabled,u.created_at,u.client_id,u.location_id,
+            cl.display_name AS location_name, c.name AS client_name
+       FROM users u
+       LEFT JOIN client_locations cl ON cl.id = u.location_id
+       LEFT JOIN clients c ON c.id = u.client_id
+      ORDER BY u.name`
+  ).all();
   return json(results);
 }
 
@@ -13421,13 +13510,25 @@ async function handleCreateUser(request: Request, env: Env): Promise<Response> {
   const isClientRole = ["client_admin","client_approver","client_user"].includes(body.role);
   const isVendorRole = ["vendor_admin","vendor_user"].includes(body.role);
   let clientId: string | null = null;
+  let locationId: string | null = null;
   let org = "4SYZ Platform";
   if (isClientRole) {
-    if (!body.client_id) return json({error:"Select a client — client users must belong to an onboarded client"}, 400);
-    const client = await env.DB.prepare("SELECT id,name FROM clients WHERE id=? AND active=1").bind(body.client_id).first() as {id:string;name:string}|null;
-    if (!client) return json({error:"Client not found or inactive"}, 400);
-    clientId = client.id;
-    org = client.name;
+    await ensureClientLocationSchema(env);
+    if (body.location_id) {
+      // A client user belongs to a specific client location.
+      const loc = await resolveUserLocation(env, body.location_id);
+      if (!loc) return json({error:"Location not found or inactive"}, 400);
+      clientId = loc.client_id; org = loc.client_name; locationId = loc.location_id;
+    } else if (body.client_id) {
+      // Backward-compatible: only a client was chosen — link to its default location.
+      const client = await env.DB.prepare("SELECT id,name FROM clients WHERE id=? AND active=1").bind(body.client_id).first() as {id:string;name:string}|null;
+      if (!client) return json({error:"Client not found or inactive"}, 400);
+      await ensureDefaultLocation(env, client);
+      const def = await env.DB.prepare("SELECT id FROM client_locations WHERE client_id=? ORDER BY is_default DESC, created_at ASC LIMIT 1").bind(client.id).first() as {id?:string}|null;
+      clientId = client.id; org = client.name; locationId = def?.id || null;
+    } else {
+      return json({error:"Select a location — client users must belong to a specific client location"}, 400);
+    }
   } else if (isVendorRole) {
     if (!body.vendor_id) return json({error:"Select a vendor — vendor users must belong to an existing vendor"}, 400);
     const vendor = await env.DB.prepare("SELECT id,name FROM vendors WHERE id=?").bind(body.vendor_id).first() as {id:string;name:string}|null;
@@ -13435,8 +13536,8 @@ async function handleCreateUser(request: Request, env: Env): Promise<Response> {
     org = vendor.name;
   }
 
-  await env.DB.prepare("INSERT INTO users (id,email,password_hash,role,name,org,initials,client_id) VALUES (?,?,?,?,?,?,?,?)")
-    .bind(id,body.email,ph,body.role,body.name,org,initials,clientId).run();
+  await env.DB.prepare("INSERT INTO users (id,email,password_hash,role,name,org,initials,client_id,location_id) VALUES (?,?,?,?,?,?,?,?,?)")
+    .bind(id,body.email,ph,body.role,body.name,org,initials,clientId,locationId).run();
   await sendEmail(env, body.email, "Welcome to Smart Pantry",
     `Dear ${body.name},\n\nYour Smart Pantry account has been created.\n\nEmail: ${body.email}\nTemporary Password: ${body.password||"password"}\n\nPlease log in and change your password immediately.\n\nRegards,\n4SYZ Platform`);
   await audit(env, user, "CREATE", "user", id, undefined, `email:${body.email},role:${body.role}`);
@@ -13448,11 +13549,25 @@ async function handlePatchUser(request: Request, env: Env, path: string): Promis
   const denied = requireUser(user); if (denied) return denied;
   if (user!.role !== "super_admin") return json({error:"Forbidden"}, 403);
   const id = path.split("/").pop()!;
-  const body = await request.json() as {active?:number;role?:string;password?:string;name?:string;email?:string;org?:string;client_id?:string;vendor_id?:string};
+  const body = await request.json() as {active?:number;role?:string;password?:string;name?:string;email?:string;org?:string;client_id?:string;location_id?:string;vendor_id?:string};
+  await ensureClientLocationSchema(env);
   const updates: string[] = [];
   const vals: unknown[] = [];
   if (body.active !== undefined) { updates.push("active=?"); vals.push(body.active); }
   if (body.role)     { updates.push("role=?");          vals.push(body.role); }
+  // A client user is reassigned by location: the location fixes the client + org.
+  if (body.location_id !== undefined) {
+    if (body.location_id) {
+      const loc = await resolveUserLocation(env, body.location_id);
+      if (!loc) return json({error:"Location not found or inactive"}, 400);
+      updates.push("location_id=?"); vals.push(loc.location_id);
+      updates.push("client_id=?");   vals.push(loc.client_id);
+      updates.push("org=?");          vals.push(loc.client_name);
+      body.org = undefined; body.client_id = undefined; // derived from the location
+    } else {
+      updates.push("location_id=?"); vals.push(null);
+    }
+  }
   if (body.client_id !== undefined) {
     if (body.client_id) {
       const client = await env.DB.prepare("SELECT id,name FROM clients WHERE id=? AND active=1").bind(body.client_id).first() as {id:string;name:string}|null;
@@ -13462,18 +13577,22 @@ async function handlePatchUser(request: Request, env: Env, path: string): Promis
       body.org = undefined; // org comes from the client record
     } else {
       updates.push("client_id=?"); vals.push(null);
+      updates.push("location_id=?"); vals.push(null); // no client → no location
     }
   }
   if (body.vendor_id) {
     const vendor = await env.DB.prepare("SELECT id,name FROM vendors WHERE id=?").bind(body.vendor_id).first() as {id:string;name:string}|null;
     if (!vendor) return json({error:"Vendor not found"}, 400);
     updates.push("org=?"); vals.push(vendor.name);
+    updates.push("client_id=?"); vals.push(null);
+    updates.push("location_id=?"); vals.push(null); // vendor users have no client location
     body.org = undefined;
   }
   // Platform (non-client, non-vendor) roles always belong to 4SYZ Platform
   if (body.role && !["client_admin","client_approver","client_user","vendor_admin","vendor_user"].includes(body.role)) {
     updates.push("org=?"); vals.push("4SYZ Platform");
     if (body.client_id === undefined) { updates.push("client_id=?"); vals.push(null); }
+    updates.push("location_id=?"); vals.push(null); // platform roles have no client location
     body.org = undefined;
   }
   if (body.name)     { updates.push("name=?");           vals.push(body.name);

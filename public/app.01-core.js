@@ -587,14 +587,18 @@ function initApp() {
   const u = APP.user;
   document.getElementById('login-screen').classList.add('hidden');
   document.getElementById('app').classList.remove('hidden');
+  // For a client user tied to a specific location, show the location display name
+  // (e.g. "Chaayos - Indiranagar") so they can see where they're working; others
+  // fall back to their org.
+  const orgLine = u.location_name || u.org;
   document.getElementById('user-name').textContent = u.name;
-  document.getElementById('user-role').textContent = u.org;
+  document.getElementById('user-role').textContent = orgLine;
   document.getElementById('user-avatar').textContent = u.initials;
   document.getElementById('topbar-avatar').textContent = u.initials;
   // header profile menu
   setText('topbar-profile-name', (u.name||'').split(' ')[0]);
-  setText('topbar-profile-org', u.org || '');
-  setText('pm-avatar', u.initials); setText('pm-name', u.name); setText('pm-role', u.org);
+  setText('topbar-profile-org', orgLine || '');
+  setText('pm-avatar', u.initials); setText('pm-name', u.name); setText('pm-role', orgLine);
   // Settings lives under the profile menu; only roles with the page see it
   const settingsItem = document.getElementById('pm-settings');
   if (settingsItem) settingsItem.style.display = (PAGE_MAP.settings && ['super_admin','ops_admin'].includes(u.role)) ? '' : 'none';

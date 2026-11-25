@@ -37,6 +37,8 @@ export interface JWTPayload {
   org: string;
   initials: string;
   client_id?: string;
+  location_id?: string;
+  location_name?: string;
   iat: number;
   exp: number;
 }

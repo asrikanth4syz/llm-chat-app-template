@@ -517,6 +517,7 @@ async function renderUsers(el) {
         <div style="display:flex;align-items:center;gap:6px;margin-top:5px;flex-wrap:wrap">
           <span style="font-size:.68rem;font-weight:700;background:${rc}1a;color:${rc};border-radius:4px;padding:2px 7px">${roleName}</span>
           <span style="font-size:.68rem;color:var(--text-muted)">${h(u.org)}</span>
+          ${u.location_name?`<span style="font-size:.66rem;font-weight:600;background:#eef2f6;color:#475569;border-radius:4px;padding:1px 6px" title="Location">📍 ${h(u.location_name)}</span>`:''}
           ${u.two_fa_enabled?`<span style="font-size:.66rem;font-weight:600;background:var(--success-soft-bg);color:var(--success-strong);border-radius:4px;padding:1px 6px">🔐 2FA</span>`:''}
         </div>
       </div>
@@ -598,17 +599,21 @@ async function renderUsers(el) {
 const CLIENT_ROLES = ['client_admin','client_approver','client_user'];
 const VENDOR_ROLES = ['vendor_admin','vendor_user'];
 
-/* Org field by role: client dropdown / vendor dropdown / fixed 4SYZ Platform */
-function userOrgFieldHtml(prefix, role, clients, vendors, currentClientId, currentOrg) {
+// The picker label for a client location: "<display name> · <client>".
+function userLocLabel(l) { return l ? `${l.display_name}${l.client_name ? ' · ' + l.client_name : ''}` : ''; }
+
+/* Org field by role: client-location combobox / vendor dropdown / fixed 4SYZ Platform */
+function userOrgFieldHtml(prefix, role, clients, vendors, locations, cur) {
+  cur = cur || {};
   if (CLIENT_ROLES.includes(role)) {
-    if (!clients.length) {
-      return `<div class="alert alert-warning" style="margin:0">No active clients onboarded yet. Onboard the client first (Clients page), then create its users.</div>`;
+    if (!locations.length) {
+      return `<div class="alert alert-warning" style="margin:0">No client locations yet. Onboard a client and add its locations (Clients → 🏢 Locations) first, then create its users.</div>`;
     }
-    return `<select id="${prefix}-client">
-      <option value="">— Select client —</option>
-      ${clients.map(c=>`<option value="${c.id}" ${c.id===currentClientId?'selected':''}>${h(c.name)}</option>`).join('')}
-    </select>
-    <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px">Client users must belong to an onboarded client</div>`;
+    return `<input type="hidden" id="${prefix}-loc-id" value="${h(cur.locationId||'')}">
+    <input type="text" id="${prefix}-loc-input" autocomplete="off" placeholder="Search by client or location…"
+      value="${h(cur.locationLabel||'')}" ${dataInput('userLocFilter', prefix)} data-focusact="userLocFilterEl" data-args="${h(JSON.stringify([prefix]))}" style="width:100%">
+    <div id="${prefix}-loc-list" class="combo-list" style="display:none;border:1px solid var(--border);border-top:0;border-radius:0 0 6px 6px;max-height:210px;overflow:auto;background:var(--surface)"></div>
+    <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px">Client users belong to a specific client location. Type to filter by client or location name.</div>`;
   }
   if (VENDOR_ROLES.includes(role)) {
     if (!vendors.length) {
@@ -616,7 +621,7 @@ function userOrgFieldHtml(prefix, role, clients, vendors, currentClientId, curre
     }
     return `<select id="${prefix}-vendor">
       <option value="">— Select vendor —</option>
-      ${vendors.map(v=>`<option value="${v.id}" ${v.name===currentOrg?'selected':''}>${h(v.name)}</option>`).join('')}
+      ${vendors.map(v=>`<option value="${v.id}" ${v.name===cur.org?'selected':''}>${h(v.name)}</option>`).join('')}
     </select>
     <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px">Vendor users must belong to an existing vendor</div>`;
   }
@@ -626,23 +631,49 @@ function userOrgFieldHtml(prefix, role, clients, vendors, currentClientId, curre
   <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px">Platform roles always belong to 4SYZ Platform</div>`;
 }
 
-function bindUserRoleToggle(prefix, clients, vendors, currentClientId, currentOrg) {
+// Filter the client-location combobox list on both client name and location display name.
+// Any keystroke clears a prior pick so the saved value is always an explicit selection.
+function userLocFilter(prefix) {
+  const hid = document.getElementById(prefix+'-loc-id'); if (hid) hid.value = '';
+  const q = (document.getElementById(prefix+'-loc-input')?.value || '').trim().toLowerCase();
+  const list = document.getElementById(prefix+'-loc-list'); if (!list) return;
+  const all = APP._userLocCache || [];
+  const matches = (q ? all.filter(l => (l.client_name||'').toLowerCase().includes(q) || (l.display_name||'').toLowerCase().includes(q)) : all).slice(0, 60);
+  if (!matches.length) { list.style.display = 'none'; list.innerHTML = ''; return; }
+  list.innerHTML = matches.map(l => `<div class="combo-opt" ${dataAct('userLocPick', prefix, l.id)} style="padding:7px 10px;cursor:pointer;border-bottom:1px solid var(--border)"><div style="font-weight:600;color:var(--navy)">${h(l.display_name)}</div><div style="font-size:.72rem;color:var(--text-muted)">${h(l.client_name)}</div></div>`).join('');
+  list.style.display = '';
+}
+// Opening the field (focus) shows the full list; data-focusact passes the element, so
+// this variant ignores it and delegates to userLocFilter by prefix.
+function userLocFilterEl(prefix) { userLocFilter(prefix); }
+function userLocPick(prefix, id) {
+  const l = (APP._userLocCache || []).find(x => x.id === id); if (!l) return;
+  const inp = document.getElementById(prefix+'-loc-input'); const hid = document.getElementById(prefix+'-loc-id');
+  if (inp) inp.value = userLocLabel(l);
+  if (hid) hid.value = id;
+  const list = document.getElementById(prefix+'-loc-list'); if (list) { list.style.display = 'none'; list.innerHTML = ''; }
+}
+
+function bindUserRoleToggle(prefix, clients, vendors, locations, cur) {
   const roleSel = document.getElementById(`${prefix}-role`);
   if (!roleSel) return;
   roleSel.onchange = () => {
     const wrap = document.getElementById(`${prefix}-org-wrap`);
-    if (wrap) wrap.innerHTML = userOrgFieldHtml(prefix, roleSel.value, clients, vendors, currentClientId, currentOrg);
+    if (wrap) wrap.innerHTML = userOrgFieldHtml(prefix, roleSel.value, clients, vendors, locations, cur);
   };
 }
 
 async function addUserModal() {
   if (APP.user.role !== 'super_admin') { showToast('Only Super Admin can add users','error'); return; }
-  const [clientsRaw, vendorsRaw] = await Promise.all([
+  const [clientsRaw, vendorsRaw, locsRaw] = await Promise.all([
     api('/clients').catch(()=>[]),
     api('/vendors').catch(()=>[]),
+    api('/client-locations').catch(()=>null),
   ]);
   const clients = (clientsRaw||[]).filter(c=>c.active);
   const vendors = (vendorsRaw||[]);
+  const locations = (locsRaw && locsRaw.locations) || [];
+  APP._userLocCache = locations;
   const firstRole = Object.keys(ROLES)[0];
   openModal('Add User',
     `<div class="form-group"><label>Full Name</label><input type="text" id="u-name"></div>
@@ -652,13 +683,13 @@ async function addUserModal() {
          ${Object.entries(ROLES).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('')}
        </select>
      </div>
-     <div class="form-group"><label>Company / Client / Vendor</label>
-       <div id="u-org-wrap">${userOrgFieldHtml('u', firstRole, clients, vendors, null, '')}</div>
+     <div class="form-group"><label>Company / Client location / Vendor</label>
+       <div id="u-org-wrap">${userOrgFieldHtml('u', firstRole, clients, vendors, locations, {})}</div>
      </div>
      <div class="form-group"><label>Temporary Password</label><input type="password" id="u-pw" value="password"></div>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
      <button class="btn btn-primary" ${dataAct('saveUser')}>Create User</button>`);
-  bindUserRoleToggle('u', clients, vendors, null, '');
+  bindUserRoleToggle('u', clients, vendors, locations, {});
 }
 
 async function saveUser() {
@@ -671,9 +702,9 @@ async function saveUser() {
   };
   if (!body.name||!body.email) { showToast('Name and email required','error'); return; }
   if (CLIENT_ROLES.includes(role)) {
-    const clientId = document.getElementById('u-client')?.value;
-    if (!clientId) { showToast('Select a client — client users must belong to an onboarded client','error'); return; }
-    body.client_id = clientId;
+    const locId = document.getElementById('u-loc-id')?.value;
+    if (!locId) { showToast('Pick a client location from the list','error'); return; }
+    body.location_id = locId;
   } else if (VENDOR_ROLES.includes(role)) {
     const vendorId = document.getElementById('u-vendor')?.value;
     if (!vendorId) { showToast('Select a vendor — vendor users must belong to an existing vendor','error'); return; }
@@ -690,12 +721,19 @@ async function editUserModal(id) {
   if (APP.user.role !== 'super_admin') { showToast('Only Super Admin can edit users','error'); return; }
   const u = APP._usersCache?.[id];
   if (!u) { showToast('User not found','error'); return; }
-  const [clientsRaw, vendorsRaw] = await Promise.all([
+  const [clientsRaw, vendorsRaw, locsRaw] = await Promise.all([
     api('/clients').catch(()=>[]),
     api('/vendors').catch(()=>[]),
+    api('/client-locations').catch(()=>null),
   ]);
   const clients = (clientsRaw||[]).filter(c=>c.active);
   const vendors = (vendorsRaw||[]);
+  const locations = (locsRaw && locsRaw.locations) || [];
+  APP._userLocCache = locations;
+  const cur = {
+    clientId: u.client_id, org: u.org, locationId: u.location_id || '',
+    locationLabel: u.location_name ? userLocLabel({ display_name: u.location_name, client_name: u.client_name || u.org }) : '',
+  };
   openModal(`Edit User — ${u.name}`,
     `<div class="form-group"><label>Full Name</label><input type="text" id="eu-name" value="${h(u.name)}"></div>
      <div class="form-group"><label>Email</label><input type="email" id="eu-email" value="${h(u.email)}"></div>
@@ -704,8 +742,8 @@ async function editUserModal(id) {
          ${Object.entries(ROLES).map(([k,v])=>`<option value="${k}" ${u.role===k?'selected':''}>${v.label}</option>`).join('')}
        </select>
      </div>
-     <div class="form-group"><label>Company / Client / Vendor</label>
-       <div id="eu-org-wrap">${userOrgFieldHtml('eu', u.role, clients, vendors, u.client_id, u.org)}</div>
+     <div class="form-group"><label>Company / Client location / Vendor</label>
+       <div id="eu-org-wrap">${userOrgFieldHtml('eu', u.role, clients, vendors, locations, cur)}</div>
      </div>
      <div class="form-group">
        <label>Reset Password <span style="font-weight:400;color:var(--text-muted);font-size:.76rem">(leave blank to keep current)</span></label>
@@ -713,7 +751,7 @@ async function editUserModal(id) {
      </div>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
      <button class="btn btn-primary" ${dataAct('saveUserEdit', id)}>Save Changes</button>`);
-  bindUserRoleToggle('eu', clients, vendors, u.client_id, u.org);
+  bindUserRoleToggle('eu', clients, vendors, locations, cur);
 }
 
 async function saveUserEdit(id) {
@@ -729,9 +767,9 @@ async function saveUserEdit(id) {
   if (email !== u.email) body.email = email;
   if (role  !== u.role)  body.role  = role;
   if (CLIENT_ROLES.includes(role)) {
-    const clientId = document.getElementById('eu-client')?.value;
-    if (!clientId) { showToast('Select a client — client users must belong to an onboarded client','error'); return; }
-    if (clientId !== u.client_id) body.client_id = clientId;
+    const locId = document.getElementById('eu-loc-id')?.value;
+    if (!locId) { showToast('Pick a client location from the list','error'); return; }
+    if (locId !== u.location_id) body.location_id = locId;
   } else if (VENDOR_ROLES.includes(role)) {
     const vendorSel = document.getElementById('eu-vendor');
     const vendorId = vendorSel?.value;
