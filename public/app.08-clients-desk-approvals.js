@@ -411,6 +411,7 @@ async function renderClients(el) {
     const hColor     = c.health_score>=85?'var(--success)':c.health_score>=70?'#d97706':'var(--danger)';
     const budColor   = budgetPct>90?'var(--danger)':budgetPct>75?'#f59e0b':'var(--success)';
     const initials   = c.name.split(/\s+/).map(w=>w[0]||'').join('').toUpperCase().slice(0,2);
+    const canBudget  = ['super_admin','ops_admin','ops_manager'].includes(APP.user?.role);
     return `
     <div style="background:var(--surface);border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:18px 20px;border-top:3px solid ${hColor}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px">
@@ -466,6 +467,9 @@ async function renderClients(el) {
         <button class="btn btn-gold btn-sm" ${dataAct('editClientById', _regClient(c))}>Edit</button>
         ${['super_admin','ops_admin','ops_manager'].includes(APP.user?.role) ? `<button class="btn btn-sm" style="background:#ecfdf5;color:#047857;border:none;font-weight:600" ${dataAct('clientLocations', c.id)}>🏢 Locations</button>` : ''}
         <button class="btn btn-sm" style="background:#e0f2fe;color:#0369a1;border:none;font-weight:600" ${dataAct('manageClientCatalog', c.id, c.name)}>📦 Products</button>
+        ${canBudget
+          ? `<button class="btn btn-sm" style="background:#fef3c7;color:#92400e;border:none;font-weight:600;cursor:pointer" ${dataAct('clientBudgetById', _regClient(c))}>💰 Budget</button>`
+          : `<button class="btn btn-sm" disabled title="You don't have permission to view budgets" style="background:#f1f5f9;color:#94a3b8;border:none;cursor:not-allowed">💰 Budget</button>`}
         <button class="btn btn-sm" style="background:${c.active===0?'var(--success)':'var(--danger-soft-bg)'};color:${c.active===0?'#fff':'var(--danger)'};border:none" ${dataAct('toggleClientActive', c.id, c.name, c.active===0?0:1)}>${c.active===0?'Enable':'Disable'}</button>
       </div>
     </div>`;
@@ -1295,6 +1299,64 @@ function viewClientModal(c) {
     ${mapUrl?`<div style="margin-top:12px"><a href="${mapUrl}" target="_blank" rel="noopener" class="btn btn-secondary btn-sm">🗺 View on Google Maps</a></div>`:''}`,
     `<button class="btn btn-primary" ${dataAct('editClientById', _regClient(c))}>Edit</button>
      <button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
+}
+
+// Budget tile → per-client budget view (spend vs limits + monthly history). Scoped to
+// the client the tile belongs to (plus its locations, by display name). Admin-only.
+async function clientBudgetById(id) {
+  const c = APP._clientById && APP._clientById[id];
+  if (!c) { showToast('Client not found', 'error'); return; }
+  if (!['super_admin','ops_admin','ops_manager'].includes(APP.user?.role)) {
+    showToast("You don't have permission to view budgets", 'error'); return;
+  }
+  openModal('Budget', `<div class="loading-state"><div class="spinner"></div><p>Loading budget…</p></div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
+  const [orders, locData] = await Promise.all([
+    api('/orders?client_id=' + encodeURIComponent(id)).catch(() => []),
+    api('/clients/' + encodeURIComponent(id) + '/order-locations').catch(() => null),
+  ]);
+  clientBudgetModal(c, orders || [], (locData && locData.locations) || []);
+}
+
+function clientBudgetModal(c, orders, locations) {
+  const budget = c.monthly_budget || 0;
+  const spent  = c.spent_this_month || 0;
+  const pct    = budget > 0 ? Math.min(100, Math.round(spent / budget * 100)) : 0;
+  const remain = Math.max(0, budget - spent);
+  const color  = pct > 90 ? 'var(--danger)' : pct > 75 ? '#f59e0b' : 'var(--success)';
+  const closed = (orders || []).filter(o => o.status === 'CLOSED');
+  const active = (orders || []).filter(o => !['CLOSED','CANCELLED'].includes(o.status));
+  const byMonth = {};
+  closed.forEach(o => { const m = (o.created_at || '').slice(0, 7); if (m) byMonth[m] = (byMonth[m] || 0) + (o.grand_total || 0); });
+  const months = Object.keys(byMonth).sort().slice(-6);
+  const maxM = Math.max(1, ...months.map(m => byMonth[m]));
+  const title = (c.display_name && c.display_name !== c.name) ? `${c.display_name} — ${c.name}` : c.name;
+  const locLine = (locations && locations.length) ? `📍 ${locations.map(l => h(l.display_name)).join(' · ')}` : '';
+  const body = `
+    ${locLine ? `<div style="font-size:.8rem;color:var(--text-muted);margin-bottom:12px">${locLine}</div>` : ''}
+    <div style="display:flex;justify-content:space-between;font-size:.8rem;margin-bottom:6px"><span>Budget Used</span><span style="font-weight:700;color:${color}">${pct}% · ${fmt(spent)} of ${fmt(budget)}</span></div>
+    <div style="background:var(--border);height:10px;border-radius:5px;overflow:hidden;margin-bottom:16px"><div style="height:100%;width:${pct}%;background:${color};border-radius:5px;transition:width .4s"></div></div>
+    <div class="tile-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:16px">
+      ${tileHtml({label:'Spent This Month', value:fmt(spent), sub:`${pct}% of budget`, accent:color})}
+      ${tileHtml({label:'Remaining', value:fmt(remain), sub:'this month', accent:'var(--primary)'})}
+      ${tileHtml({label:'Monthly Budget', value:fmt(budget), accent:'var(--success)'})}
+    </div>
+    <div style="font-weight:700;color:var(--navy);margin:4px 0 8px">Limits</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">
+      <div><div class="u-muted-xs">Approval Threshold</div><div class="u-b600">${fmt(c.approval_threshold)}</div></div>
+      <div><div class="u-muted-xs">Active Orders</div><div class="u-b600">${active.length}</div></div>
+      <div><div class="u-muted-xs">Credit Limit</div><div class="u-b600">${c.credit_limit ? fmt(c.credit_limit) : '—'}</div></div>
+      <div><div class="u-muted-xs">Credit Used</div><div class="u-b600">${c.credit_used ? fmt(c.credit_used) : '—'}</div></div>
+    </div>
+    <div style="font-weight:700;color:var(--navy);margin:4px 0 8px">Spend history <span style="font-weight:400;color:var(--text-muted);font-size:.78rem">(closed orders)</span></div>
+    ${months.length ? months.map(m => `
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+        <div style="width:72px;font-size:.78rem;color:var(--text-muted)">${new Date(m + '-01').toLocaleDateString('en-IN', { month:'short', year:'2-digit' })}</div>
+        <div style="flex:1;background:var(--border);height:8px;border-radius:4px;overflow:hidden"><div style="height:100%;width:${Math.round(byMonth[m] / maxM * 100)}%;background:var(--primary);border-radius:4px"></div></div>
+        <div style="width:96px;text-align:right;font-size:.78rem;font-weight:600">${fmt(byMonth[m])}</div>
+      </div>`).join('') : `<div class="u-muted" style="font-size:.82rem">No closed orders yet.</div>`}
+  `;
+  openModal(`Budget — ${h(title)}`, body, `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
 }
 
 async function editClientModal(c) {
