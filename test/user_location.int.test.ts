@@ -113,6 +113,15 @@ describe("login carries the location name", () => {
     expect(r.user.location_id).toBe("locInd");
     expect(r.user.location_name).toBe("Chaayos - Indiranagar");
   });
+  it("lazily resolves the location at login for a legacy client user (no location_id)", async () => {
+    // u-leg has a client but no location_id; logging in should link + carry the default.
+    const tok = await login("leg@legacy.test", "pw123");
+    const r = await (await get("/api/auth/me", tok)).json() as any;
+    expect(r.user.location_id).toBe("locLeg");
+    expect(r.user.location_name).toBe("Legacy Co - HQ");
+    const u = await db().prepare("SELECT location_id FROM users WHERE id='u-leg'").first() as any;
+    expect(u.location_id).toBe("locLeg"); // persisted, not just in the token
+  });
   it("the users list exposes location_name + client_name", async () => {
     const list = await (await get("/api/users", saTok)).json() as any[];
     const ravi = list.find((u) => u.id === "u-ravi");

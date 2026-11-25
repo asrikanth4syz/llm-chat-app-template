@@ -7728,19 +7728,15 @@ async function handleOTPVerify(request: Request, env: Env): Promise<Response> {
 }
 
 async function issueToken(row: Record<string,string>, env: Env): Promise<Response> {
-  let locationName = "";
-  if (row.location_id) {
-    try {
-      const l = await env.DB.prepare("SELECT display_name FROM client_locations WHERE id=?").bind(row.location_id).first() as {display_name?:string}|null;
-      if (l?.display_name) locationName = l.display_name;
-    } catch { /* client_locations may not exist on a legacy DB */ }
-  }
+  // For a client user, resolve (and lazily link) their location so the login header can
+  // show the location display name even for accounts created before this feature.
+  const loc = await ensureClientUserLocation(env, row.id, row.client_id, row.location_id);
   const payload: JWTPayload = {
     sub: row.id, email: row.email, role: row.role,
     name: row.name, org: row.org, initials: row.initials,
     ...(row.client_id ? { client_id: row.client_id } : {}),
-    ...(row.location_id ? { location_id: row.location_id } : {}),
-    ...(locationName ? { location_name: locationName } : {}),
+    ...(loc?.location_id ? { location_id: loc.location_id } : {}),
+    ...(loc?.location_name ? { location_name: loc.location_name } : {}),
     iat: Math.floor(Date.now()/1000), exp: Math.floor(Date.now()/1000) + 86400*7,
   };
   const token = await signJWT(payload, env.JWT_SECRET);
@@ -7759,13 +7755,12 @@ async function handleMe(request: Request, env: Env): Promise<Response> {
       if (c?.name) user.org = c.name;
     } catch { /* clients row missing — keep token value */ }
   }
-  // Keep the location display name live too, so an edited location name shows
-  // everywhere without a re-login (references are by id, not name).
-  if (user.location_id) {
-    try {
-      const l = await env.DB.prepare("SELECT display_name FROM client_locations WHERE id=?").bind(user.location_id).first() as {display_name?:string}|null;
-      if (l?.display_name) user.location_name = l.display_name;
-    } catch { /* client_locations missing — keep token value */ }
+  // Resolve the location display name live (and lazily link client users who never had
+  // one), so an edited name — or an account created before this feature — shows the
+  // location without a re-login. References are by id, not name.
+  if (user.client_id) {
+    const loc = await ensureClientUserLocation(env, user.sub, user.client_id, user.location_id);
+    if (loc?.location_id) { user.location_id = loc.location_id; if (loc.location_name) user.location_name = loc.location_name; }
   }
   return json({user});
 }
@@ -12878,6 +12873,34 @@ async function handleAllClientLocations(request: Request, env: Env): Promise<Res
       ORDER BY c.name COLLATE NOCASE, cl.is_default DESC, cl.display_name COLLATE NOCASE`
   ).all();
   return json({ locations: results });
+}
+
+// Resolve (and lazily persist) a client user's current location for the login token /
+// profile. Existing client users may have no location_id yet, so this links them to the
+// client's default location on the fly and returns its display name. Returns null for
+// non-client users or when the client has no resolvable location.
+async function ensureClientUserLocation(env: Env, userId: string, clientId: string | undefined, locationId: string | undefined): Promise<{ location_id: string; location_name: string } | null> {
+  if (!clientId) return null;
+  try {
+    await ensureClientLocationSchema(env);
+    let locId = (locationId || "").trim();
+    if (!locId) {
+      const u = await env.DB.prepare("SELECT location_id FROM users WHERE id=?").bind(userId).first() as { location_id?: string } | null;
+      locId = (u?.location_id || "").trim();
+    }
+    if (!locId) {
+      const client = await env.DB.prepare("SELECT id,name,address,contact_name,contact_phone FROM clients WHERE id=?").bind(clientId).first() as Record<string, unknown> | null;
+      if (client) await ensureDefaultLocation(env, client);
+      const def = await env.DB.prepare("SELECT id FROM client_locations WHERE client_id=? AND active=1 ORDER BY is_default DESC, created_at ASC LIMIT 1").bind(clientId).first() as { id?: string } | null;
+      if (def?.id) {
+        locId = def.id;
+        await env.DB.prepare("UPDATE users SET location_id=? WHERE id=? AND (location_id IS NULL OR location_id='')").bind(locId, userId).run().catch(() => {});
+      }
+    }
+    if (!locId) return null;
+    const l = await env.DB.prepare("SELECT display_name FROM client_locations WHERE id=?").bind(locId).first() as { display_name?: string } | null;
+    return { location_id: locId, location_name: l?.display_name || "" };
+  } catch { return null; }
 }
 
 // Resolve a client-location id to its client + names, for linking a user to a location.
