@@ -475,6 +475,16 @@ async function renderClients(el) {
     </div>`;
   }
 
+  // Clicking a summary tile filters the grid to that segment; clicking the active
+  // tile (or Total Clients) clears it. Segment predicates mirror the tile counts.
+  const seg = APP._clientDirFilter || 'all';
+  const inSeg = (c) => seg === 'near' ? c.spent_this_month / c.monthly_budget > 0.9
+                     : seg === 'risk' ? c.health_score < 70
+                     : seg === 'spending' ? (c.spent_this_month || 0) > 0
+                     : true;
+  const segLabel = { near: 'Near budget limit', risk: 'At risk', spending: 'With spend this month' };
+  const shown = clients.filter(inSeg).sort((a,b)=>(a.health_score||0)-(b.health_score||0));
+
   el.innerHTML = `
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
     <div>
@@ -487,19 +497,31 @@ async function renderClients(el) {
     </div>
   </div>
 
-  <!-- Summary tiles -->
+  <!-- Summary tiles (clickable: filter the grid below) -->
   <div class="tile-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:18px">
-    ${tileHtml({label:'Total Clients',value:clients.length,accent:'var(--blue)'})}
-    ${tileHtml({label:'Total Budget',value:fmt(totalBudget),sub:`${fmt(totalSpent)} spent this month`,accent:'var(--success)'})}
-    ${tileHtml({label:'Near Budget Limit',value:overBudget,sub:'&gt;90% budget used',accent:overBudget?'var(--warning)':'var(--gray-light)'})}
-    ${tileHtml({label:'At Risk',value:atRisk,sub:'health score &lt;70',accent:atRisk?'var(--danger)':'var(--gray-light)'})}
+    ${tileHtml({label:'Total Clients',value:clients.length,accent:'var(--blue)',act:dataAct('clientDirFilter','all'),active:seg==='all'})}
+    ${tileHtml({label:'Total Budget',value:fmt(totalBudget),sub:`${fmt(totalSpent)} spent this month`,accent:'var(--success)',act:dataAct('clientDirFilter','spending'),active:seg==='spending'})}
+    ${tileHtml({label:'Near Budget Limit',value:overBudget,sub:'&gt;90% budget used',accent:overBudget?'var(--warning)':'var(--gray-light)',act:dataAct('clientDirFilter','near'),active:seg==='near'})}
+    ${tileHtml({label:'At Risk',value:atRisk,sub:'health score &lt;70',accent:atRisk?'var(--danger)':'var(--gray-light)',act:dataAct('clientDirFilter','risk'),active:seg==='risk'})}
   </div>
 
+  ${seg !== 'all' ? `<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:.82rem;color:var(--text-muted)">
+    Showing <b style="color:var(--navy)">${shown.length}</b> of ${clients.length} · ${h(segLabel[seg] || '')}
+    <button class="btn btn-secondary btn-sm" ${dataAct('clientDirFilter','all')} style="padding:2px 10px">Clear filter</button>
+  </div>` : ''}
+
   <!-- Client cards grid -->
-  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px">
-    ${clients.sort((a,b)=>(a.health_score||0)-(b.health_score||0)).map(c=>clientCard(c)).join('')}
-  </div>
+  ${shown.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px">
+    ${shown.map(c=>clientCard(c)).join('')}
+  </div>` : `<div class="u-muted" style="padding:28px;text-align:center">No clients ${h(segLabel[seg] ? '('+segLabel[seg].toLowerCase()+')' : '')}.</div>`}
   `;
+}
+
+// Toggle the Client Directory summary-tile filter and re-render the grid.
+function clientDirFilter(seg) {
+  APP._clientDirFilter = (APP._clientDirFilter === seg && seg !== 'all') ? 'all' : seg;
+  const el = document.getElementById('main-content');
+  if (el) renderClients(el);
 }
 
 function mapsLink(pin, address) {
