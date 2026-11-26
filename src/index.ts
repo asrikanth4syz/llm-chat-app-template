@@ -1,4 +1,8 @@
 import { Env, JWTPayload } from "./types";
+import {
+  periodWindow, nextPeriodStart, floorMinimum, validateBudgetAmount, changeDelta,
+  decideRevisionStatus, poBalance, summarizeLedger, evaluateOrderWarnings, type PeriodType,
+} from "./budget_po";
 import { parsePasteText, rankCandidates, searchCandidates, rankLine, type Candidate } from "./smart_paste";
 import { computeQuote, QuoteCalcError, type QuoteCalcResult } from "./quote_calc";
 import {
@@ -7322,6 +7326,15 @@ export default {
       if (path.match(/^\/api\/clients\/[^/]+\/catalog$/) && method==="GET")    return handleGetClientCatalog(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/locations$/) && method==="GET")  return handleListClientLocations(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/order-locations$/) && method==="GET") return handleOrderLocations(request,env,path);
+      // Budget & PO (per client-location)
+      if (path.match(/^\/api\/locations\/[^/]+\/budget$/)         && method==="GET")  return handleGetLocationBudget(request,env,path);
+      if (path.match(/^\/api\/locations\/[^/]+\/budget\/revise$/) && method==="POST") return handleReviseBudget(request,env,path);
+      if (path.match(/^\/api\/locations\/[^/]+\/budget\/history$/)&& method==="GET")  return handleBudgetHistory(request,env,path);
+      if (path.match(/^\/api\/locations\/[^/]+\/pos$/)            && method==="GET")  return handleListLocationPos(request,env,path);
+      if (path.match(/^\/api\/locations\/[^/]+\/pos$/)            && method==="POST") return handleCreateLocationPo(request,env,path);
+      if (path.match(/^\/api\/client-pos\/[^/]+\/amend$/)         && method==="POST") return handleAmendPo(request,env,path);
+      if (path.match(/^\/api\/clients\/[^/]+\/budget-settings$/)  && method==="GET")  return handleGetBudgetSettings(request,env,path);
+      if (path.match(/^\/api\/clients\/[^/]+\/budget-settings$/)  && method==="PUT")  return handlePutBudgetSettings(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/locations$/) && method==="POST") return handleAddClientLocation(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/locations\/[^/]+$/) && method==="PATCH") return handlePatchClientLocation(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/rename$/) && method==="POST") return handleRenameClient(request,env,path);
@@ -9064,6 +9077,8 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
   try { await env.DB.prepare("ALTER TABLE orders ADD COLUMN order_reference TEXT").run(); } catch { /* exists */ }
   try { await env.DB.prepare("ALTER TABLE orders ADD COLUMN order_period TEXT").run(); } catch { /* exists */ }
   try { await env.DB.prepare("ALTER TABLE orders ADD COLUMN location_id TEXT").run(); } catch { /* exists */ } // P2c
+  try { await env.DB.prepare("ALTER TABLE orders ADD COLUMN po_id TEXT").run(); } catch { /* exists */ }
+  try { await env.DB.prepare("ALTER TABLE orders ADD COLUMN po_override_reason TEXT").run(); } catch { /* exists */ }
 
   const body = await request.json() as {
     client_id: string;
@@ -9076,6 +9091,8 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
     order_period?: string;
     order_reference?: string;
     location_id?: string;
+    po_id?: string;
+    po_override_reason?: string;
   };
   const orderImage = body.image && body.image.startsWith("data:image/") && body.image.length <= 1_500_000 ? body.image : null;
   // Order period (YYYY-MM) — the business month this order is FOR; default to current month
@@ -9110,6 +9127,10 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
   // ever passed (e.g. an ops-entered client PO). It is cleared when the order is
   // cancelled (see the CANCELLED branch in handleTransitionOrder).
   const orderRef = typeof body.order_reference === "string" ? body.order_reference.trim().slice(0, 80) : "";
+  // Budget-PO link (warn-only is evaluated client-side; the chosen PO + any override
+  // reason are recorded, and a committed ledger entry is written on a real submit).
+  const poId = typeof body.po_id === "string" && body.po_id.trim() ? body.po_id.trim() : null;
+  const poOverride = typeof body.po_override_reason === "string" && body.po_override_reason.trim() ? body.po_override_reason.trim().slice(0, 200) : null;
 
   const id = `SP-${new Date().toISOString().slice(2,7).replace("-","")}-${Math.floor(Math.random()*9000+1000)}`;
   const effRef = orderRef || id;
@@ -9122,8 +9143,8 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
     const validTypes = ['Regular','Urgent','Ad-Hoc'];
     const orderType = validTypes.includes(body.order_type||'') ? body.order_type! : 'Regular';
     const needByDate = body.need_by_date || null;
-    await env.DB.prepare(`INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type,need_by_date,order_image,order_period,order_reference,location_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-      .bind(id, body.client_id, user!.sub, "DRAFT", subtotal, gst, grand_total, body.notes||null, orderType, needByDate, orderImage, orderPeriod, effRef, locationId).run();
+    await env.DB.prepare(`INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type,need_by_date,order_image,order_period,order_reference,location_id,po_id,po_override_reason) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .bind(id, body.client_id, user!.sub, "DRAFT", subtotal, gst, grand_total, body.notes||null, orderType, needByDate, orderImage, orderPeriod, effRef, locationId, poId, poOverride).run();
     for (const item of body.items) {
       await env.DB.prepare(`INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total,item_note) VALUES (?,?,?,?,?,?,?,?)`)
         .bind(uid(), id, item.sku, item.name, item.qty, item.unit_price, item.qty*item.unit_price, item.note||null).run();
@@ -9154,8 +9175,17 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
   else if (rule?.auto_approve) status = "APPROVED";
   else if (grand_total > (rule?.min_amount as number || 100000)) status = "PENDING_APPROVAL";
 
-  await env.DB.prepare(`INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type,need_by_date,order_image,order_period,order_reference,location_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-    .bind(id, body.client_id, user!.sub, status, subtotal, gst, grand_total, body.notes||null, orderType, needByDate, orderImage, orderPeriod, effRef, locationId).run();
+  await env.DB.prepare(`INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type,need_by_date,order_image,order_period,order_reference,location_id,po_id,po_override_reason) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .bind(id, body.client_id, user!.sub, status, subtotal, gst, grand_total, body.notes||null, orderType, needByDate, orderImage, orderPeriod, effRef, locationId, poId, poOverride).run();
+
+  // PO ledger: a real submit commits the order's value against its PO (warn-only — the
+  // order is never blocked; any override reason is already stored on the order row).
+  if (poId) {
+    try {
+      await ensureBudgetPoSchema(env);
+      await env.DB.prepare("INSERT INTO client_po_ledger (id,po_id,order_id,type,amount) VALUES (?,?,?,'commit',?)").bind(uid(), poId, id, grand_total).run();
+    } catch { /* PO optional / legacy */ }
+  }
 
   for (const item of body.items) {
     await env.DB.prepare(`INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total,item_note) VALUES (?,?,?,?,?,?,?,?)`)
@@ -13175,6 +13205,276 @@ async function handleClientSyncApply(request: Request, env: Env): Promise<Respon
     }
   }
   return json({ applied: results.length, results });
+}
+
+// ════════════════════════════════════════════════════════════════════
+// BUDGET & PURCHASE ORDERS (per client-location)
+// Budget is owned by the Client Admin; Our Admin can set it on behalf of the
+// client (PO reference required). Every change is an immutable revision. POs and
+// their ledger are managed by Our Admin. Over-budget / over-PO is WARN ONLY.
+// (Client/vendor "purchase_orders" here are the CLIENT budget POs — a separate
+// table from the vendor-facing purchase_orders used elsewhere.)
+// ════════════════════════════════════════════════════════════════════
+let _budgetPoReady = false;
+async function ensureBudgetPoSchema(env: Env): Promise<void> {
+  if (_budgetPoReady) return;
+  await ensureClientLocationSchema(env);
+  const stmts = [
+    `CREATE TABLE IF NOT EXISTS location_budgets ( id TEXT PRIMARY KEY, location_id TEXT NOT NULL, client_id TEXT NOT NULL,
+       period_type TEXT NOT NULL DEFAULT 'Monthly', period_label TEXT, period_start TEXT, period_end TEXT,
+       amount REAL NOT NULL DEFAULT 0, created_by_type TEXT NOT NULL DEFAULT 'client', active INTEGER NOT NULL DEFAULT 1,
+       created_at TEXT DEFAULT (datetime('now')) )`,
+    `CREATE INDEX IF NOT EXISTS idx_locbudget_loc ON location_budgets (location_id, active)`,
+    `CREATE TABLE IF NOT EXISTS budget_revisions ( id TEXT PRIMARY KEY, budget_id TEXT, location_id TEXT NOT NULL,
+       old_amount REAL, new_amount REAL, period_type TEXT, period_label TEXT, effective_kind TEXT, effective_from TEXT,
+       po_ref TEXT, reason TEXT, note TEXT, attachment_name TEXT, changed_by TEXT, changed_by_name TEXT, changed_role TEXT,
+       source TEXT, status TEXT NOT NULL DEFAULT 'applied', approver TEXT, created_at TEXT DEFAULT (datetime('now')) )`,
+    `CREATE INDEX IF NOT EXISTS idx_budgetrev_loc ON budget_revisions (location_id, created_at)`,
+    `CREATE TABLE IF NOT EXISTS budget_settings ( client_id TEXT PRIMARY KEY, approval_required INTEGER NOT NULL DEFAULT 0,
+       threshold_pct INTEGER NOT NULL DEFAULT 20, approver_user_id TEXT, po_mandatory INTEGER NOT NULL DEFAULT 0,
+       updated_at TEXT DEFAULT (datetime('now')) )`,
+    `CREATE TABLE IF NOT EXISTS client_pos ( id TEXT PRIMARY KEY, po_number TEXT NOT NULL, client_location_id TEXT NOT NULL,
+       budget_id TEXT, type TEXT NOT NULL DEFAULT 'Blanket', valid_from TEXT, valid_to TEXT, amount REAL NOT NULL DEFAULT 0,
+       category_scope TEXT, document_name TEXT, status TEXT NOT NULL DEFAULT 'Active', version INTEGER NOT NULL DEFAULT 1,
+       created_at TEXT DEFAULT (datetime('now')) )`,
+    `CREATE INDEX IF NOT EXISTS idx_clientpos_loc ON client_pos (client_location_id, status)`,
+    `CREATE TABLE IF NOT EXISTS client_po_ledger ( id TEXT PRIMARY KEY, po_id TEXT NOT NULL, order_id TEXT, type TEXT NOT NULL,
+       amount REAL NOT NULL, created_at TEXT DEFAULT (datetime('now')) )`,
+    `CREATE INDEX IF NOT EXISTS idx_poledger_po ON client_po_ledger (po_id)`,
+    `CREATE TABLE IF NOT EXISTS client_po_amendments ( id TEXT PRIMARY KEY, po_id TEXT NOT NULL, old_amount REAL, new_amount REAL,
+       reason TEXT, changed_by TEXT, changed_by_name TEXT, changed_at TEXT DEFAULT (datetime('now')) )`,
+  ];
+  for (const s of stmts) await env.DB.prepare(s).run().catch(() => {});
+  await env.DB.prepare("ALTER TABLE orders ADD COLUMN po_id TEXT").run().catch(() => {});
+  await env.DB.prepare("ALTER TABLE orders ADD COLUMN po_override_reason TEXT").run().catch(() => {});
+  _budgetPoReady = true;
+}
+
+const BUDGET_EDIT_ROLES = ["client_admin", "our_admin", "ops_admin", "super_admin"]; // our_admin acts "on behalf"
+function isOurAdmin(role: string): boolean { return role === "our_admin" || role === "ops_admin" || role === "super_admin" || role === "ops_manager"; }
+function isClientBudgetOwner(role: string): boolean { return role === "client_admin"; }
+
+// Resolve a location the caller may see; client-roles are confined to their own client.
+async function budgetLocationFor(env: Env, user: JWTPayload, locId: string): Promise<Record<string, unknown> | null> {
+  const loc = await env.DB.prepare("SELECT id, client_id, display_name FROM client_locations WHERE id=?").bind(locId).first() as Record<string, unknown> | null;
+  if (!loc) return null;
+  if (isClientRole(user.role)) { const mine = await resolveClientScope(env, user); if (!mine || String(mine) !== String(loc.client_id)) return null; }
+  return loc;
+}
+async function getBudgetSettings(env: Env, clientId: string): Promise<{ approval_required: number; threshold_pct: number; approver_user_id: string | null; po_mandatory: number }> {
+  let row = await env.DB.prepare("SELECT approval_required, threshold_pct, approver_user_id, po_mandatory FROM budget_settings WHERE client_id=?").bind(clientId).first() as Record<string, unknown> | null;
+  if (!row) { await env.DB.prepare("INSERT OR IGNORE INTO budget_settings (client_id, approval_required, threshold_pct, approver_user_id, po_mandatory) VALUES (?,0,20,NULL,0)").bind(clientId).run().catch(() => {});
+    row = { approval_required: 0, threshold_pct: 20, approver_user_id: null, po_mandatory: 0 }; }
+  return { approval_required: Number(row.approval_required || 0), threshold_pct: Number(row.threshold_pct || 20), approver_user_id: (row.approver_user_id as string) || null, po_mandatory: Number(row.po_mandatory || 0) };
+}
+// committed / actual for a location in a date window, derived from its orders.
+async function deriveLocationSpend(env: Env, locId: string, start: string, end: string): Promise<{ committed: number; actual: number }> {
+  const r = await env.DB.prepare(
+    `SELECT COALESCE(SUM(CASE WHEN status IN ('DELIVERED','BILLED','CLOSED','RETURNED') THEN grand_total ELSE 0 END),0) AS actual,
+            COALESCE(SUM(CASE WHEN status NOT IN ('DELIVERED','BILLED','CLOSED','RETURNED','CANCELLED','DRAFT') THEN grand_total ELSE 0 END),0) AS committed
+       FROM orders WHERE location_id=? AND date(created_at) BETWEEN ? AND ?`
+  ).bind(locId, start, end).first() as Record<string, unknown> | null;
+  return { committed: Number(r?.committed || 0), actual: Number(r?.actual || 0) };
+}
+async function ensureActiveBudget(env: Env, loc: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const locId = String(loc.id), clientId = String(loc.client_id);
+  let b = await env.DB.prepare("SELECT * FROM location_budgets WHERE location_id=? AND active=1 ORDER BY created_at DESC LIMIT 1").bind(locId).first() as Record<string, unknown> | null;
+  if (b) return b;
+  const c = await env.DB.prepare("SELECT monthly_budget FROM clients WHERE id=?").bind(clientId).first() as Record<string, unknown> | null;
+  const w = periodWindow("Monthly");
+  const id = uid();
+  await env.DB.prepare("INSERT INTO location_budgets (id,location_id,client_id,period_type,period_label,period_start,period_end,amount,created_by_type,active) VALUES (?,?,?,?,?,?,?,?,?,1)")
+    .bind(id, locId, clientId, "Monthly", w.label, w.start, w.end, Number(c?.monthly_budget || 0), "internal").run();
+  b = await env.DB.prepare("SELECT * FROM location_budgets WHERE id=?").bind(id).first() as Record<string, unknown>;
+  return b;
+}
+async function poComputed(env: Env, poId: string): Promise<{ committed: number; actual: number }> {
+  const { results } = await env.DB.prepare("SELECT type, amount FROM client_po_ledger WHERE po_id=?").bind(poId).all();
+  return summarizeLedger((results as Record<string, unknown>[]).map(r => ({ type: String(r.type) as "commit" | "release" | "actual", amount: Number(r.amount) })));
+}
+function poEffectiveStatus(po: Record<string, unknown>, bal: number, today: string): string {
+  const stored = String(po.status || "Active");
+  if (stored !== "Active") return stored;
+  if (po.valid_to && String(po.valid_to) < today) return "Expired";
+  if (bal <= 0) return "Fully Consumed";
+  return "Active";
+}
+
+// GET /api/locations/:locId/budget?period=Monthly|Quarterly|Yearly
+async function handleGetLocationBudget(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  await ensureBudgetPoSchema(env);
+  const locId = path.split("/")[3];
+  const loc = await budgetLocationFor(env, user!, locId); if (!loc) return json({ error: "Not found" }, 404);
+  const b = await ensureActiveBudget(env, loc);
+  const reqType = new URL(request.url).searchParams.get("period") as PeriodType | null;
+  const viewType: PeriodType = (reqType === "Monthly" || reqType === "Quarterly" || reqType === "Yearly") ? reqType : (String(b.period_type) as PeriodType);
+  const w = periodWindow(viewType);
+  const spend = await deriveLocationSpend(env, locId, w.start, w.end);
+  const settings = await getBudgetSettings(env, String(loc.client_id));
+  return json({
+    location_id: locId, display_name: loc.display_name, client_id: loc.client_id,
+    budget: { id: b.id, amount: Number(b.amount || 0), period_type: b.period_type, period_label: b.period_label, created_by_type: b.created_by_type },
+    view: { period_type: viewType, label: w.label, start: w.start, end: w.end },
+    committed: spend.committed, actual: spend.actual,
+    remaining: Number(b.amount || 0) - spend.committed - spend.actual,
+    floor: floorMinimum(spend.committed, spend.actual),
+    settings,
+    can_edit: isClientBudgetOwner(user!.role) || isOurAdmin(user!.role),
+    can_approval: isClientBudgetOwner(user!.role),
+    can_new_po: isOurAdmin(user!.role),
+  });
+}
+
+// POST /api/locations/:locId/budget/revise
+async function handleReviseBudget(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!(isClientBudgetOwner(user!.role) || isOurAdmin(user!.role))) return json({ error: "Only the Client Admin (or Our Admin on behalf) can change a budget." }, 403);
+  await ensureBudgetPoSchema(env);
+  const locId = path.split("/")[3];
+  const loc = await budgetLocationFor(env, user!, locId); if (!loc) return json({ error: "Not found" }, 404);
+  const body = await request.json().catch(() => ({})) as Record<string, unknown>;
+  const onBehalf = isOurAdmin(user!.role);
+  const newAmount = Number(body.new_amount);
+  const reason = String(body.reason || "").trim();
+  const poRef = String(body.po_ref || "").trim();
+  const note = String(body.note || "").trim();
+  const effectiveKind = body.effective_kind === "next" ? "next" : "now";
+  if (!reason) return json({ error: "A reason is required on every change." }, 400);
+  if (onBehalf && !poRef) return json({ error: "A PO reference is required when Our Admin sets the budget on behalf of the client." }, 400);
+
+  const b = await ensureActiveBudget(env, loc);
+  const targetType: PeriodType = (body.period_type === "Monthly" || body.period_type === "Quarterly" || body.period_type === "Yearly") ? body.period_type as PeriodType : (String(b.period_type) as PeriodType);
+  const curWin = periodWindow(String(b.period_type) as PeriodType);
+  const spend = await deriveLocationSpend(env, locId, curWin.start, curWin.end);
+  const chk = validateBudgetAmount(newAmount, spend.committed, spend.actual);
+  if (!chk.ok) return json({ error: chk.error, floor: chk.floor }, 400);
+
+  const settings = await getBudgetSettings(env, String(loc.client_id));
+  const status = decideRevisionStatus({ oldAmount: Number(b.amount || 0), newAmount, effectiveKind,
+    approvalEnabled: !!settings.approval_required, approver: settings.approver_user_id, thresholdPct: settings.threshold_pct });
+  const targetWin = periodWindow(targetType);
+  const effectiveFrom = effectiveKind === "next" ? nextPeriodStart(targetType) : new Date().toISOString().slice(0, 10);
+
+  let budgetId = String(b.id);
+  if (status === "applied") {
+    if (targetType !== String(b.period_type)) {
+      // Changing the period type starts a NEW budget; retire the current one.
+      await env.DB.prepare("UPDATE location_budgets SET active=0 WHERE location_id=?").bind(locId).run();
+      budgetId = uid();
+      await env.DB.prepare("INSERT INTO location_budgets (id,location_id,client_id,period_type,period_label,period_start,period_end,amount,created_by_type,active) VALUES (?,?,?,?,?,?,?,?,?,1)")
+        .bind(budgetId, locId, String(loc.client_id), targetType, targetWin.label, targetWin.start, targetWin.end, newAmount, onBehalf ? "internal" : "client").run();
+    } else {
+      await env.DB.prepare("UPDATE location_budgets SET amount=? WHERE id=?").bind(newAmount, b.id).run();
+    }
+  }
+  const revId = uid();
+  await env.DB.prepare(`INSERT INTO budget_revisions (id,budget_id,location_id,old_amount,new_amount,period_type,period_label,effective_kind,effective_from,po_ref,reason,note,attachment_name,changed_by,changed_by_name,changed_role,source,status,approver)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .bind(revId, budgetId, locId, Number(b.amount || 0), newAmount, targetType, targetWin.label, effectiveKind, effectiveFrom, poRef || null, reason, note || null,
+      String(body.attachment_name || "") || null, user!.sub, user!.name, user!.role, onBehalf ? "behalf" : "direct", status, status === "pending" ? settings.approver_user_id : null).run();
+
+  await audit(env, user, "BUDGET_REVISE", "location", locId, undefined, `${b.amount}->${newAmount} (${status})${onBehalf ? " on-behalf" : ""}`);
+  await pushNotification(env, "client_admin", `Budget for ${loc.display_name} changed to ₹${Math.round(newAmount)} (${status})`, null).catch(() => {});
+  if (onBehalf) await pushNotification(env, "ops_admin", `Account Manager copy: ${loc.display_name} budget set on behalf → ₹${Math.round(newAmount)} (${status})`, null).catch(() => {});
+  return json({ ok: true, status, revision_id: revId, amount: status === "applied" ? newAmount : Number(b.amount || 0) }, 201);
+}
+
+// GET /api/locations/:locId/budget/history?period=<label>
+async function handleBudgetHistory(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  await ensureBudgetPoSchema(env);
+  const locId = path.split("/")[3];
+  const loc = await budgetLocationFor(env, user!, locId); if (!loc) return json({ error: "Not found" }, 404);
+  const { results } = await env.DB.prepare("SELECT * FROM budget_revisions WHERE location_id=? ORDER BY created_at DESC").bind(locId).all();
+  return json({ location_id: locId, revisions: results });
+}
+
+// GET/PUT /api/clients/:clientId/budget-settings
+async function handleGetBudgetSettings(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  await ensureBudgetPoSchema(env);
+  const clientId = path.split("/")[3];
+  if (isClientRole(user!.role)) { const mine = await resolveClientScope(env, user!); if (!mine || String(mine) !== clientId) return json({ error: "Forbidden" }, 403); }
+  return json(await getBudgetSettings(env, clientId));
+}
+async function handlePutBudgetSettings(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  await ensureBudgetPoSchema(env);
+  const clientId = path.split("/")[3];
+  const body = await request.json().catch(() => ({})) as Record<string, unknown>;
+  await getBudgetSettings(env, clientId); // ensure a row exists
+  // Approval settings: Client Admin only (for their own client).
+  if (body.approval_required !== undefined || body.threshold_pct !== undefined || body.approver_user_id !== undefined) {
+    if (!isClientBudgetOwner(user!.role)) return json({ error: "Only the Client Admin can change approval settings." }, 403);
+    const mine = await resolveClientScope(env, user!); if (!mine || String(mine) !== clientId) return json({ error: "Forbidden" }, 403);
+    const en = body.approval_required ? 1 : 0;
+    const appr = en ? (String(body.approver_user_id || "") || null) : null; // no approver → approval stays off
+    await env.DB.prepare("UPDATE budget_settings SET approval_required=?, threshold_pct=?, approver_user_id=? WHERE client_id=?")
+      .bind(appr ? en : 0, Math.max(1, Math.min(100, Number(body.threshold_pct) || 20)), appr, clientId).run();
+  }
+  // po_mandatory: internal admins or the client admin may toggle.
+  if (body.po_mandatory !== undefined) {
+    if (!(isOurAdmin(user!.role) || isClientBudgetOwner(user!.role))) return json({ error: "Forbidden" }, 403);
+    await env.DB.prepare("UPDATE budget_settings SET po_mandatory=? WHERE client_id=?").bind(body.po_mandatory ? 1 : 0, clientId).run();
+  }
+  await audit(env, user, "BUDGET_SETTINGS", "client", clientId, undefined, JSON.stringify(body));
+  return json(await getBudgetSettings(env, clientId));
+}
+
+// GET/POST /api/locations/:locId/pos
+async function handleListLocationPos(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  await ensureBudgetPoSchema(env);
+  const locId = path.split("/")[3];
+  const loc = await budgetLocationFor(env, user!, locId); if (!loc) return json({ error: "Not found" }, 404);
+  const today = new Date().toISOString().slice(0, 10);
+  const { results } = await env.DB.prepare("SELECT * FROM client_pos WHERE client_location_id=? ORDER BY created_at DESC").bind(locId).all();
+  const out = [] as Record<string, unknown>[];
+  for (const p of results as Record<string, unknown>[]) {
+    const sp = await poComputed(env, String(p.id));
+    const bal = Number(p.amount || 0) - sp.committed - sp.actual;
+    out.push({ ...p, category_scope: p.category_scope ? String(p.category_scope).split(",").filter(Boolean) : [],
+      committed: sp.committed, actual: sp.actual, balance: bal, status: poEffectiveStatus(p, bal, today) });
+  }
+  return json({ location_id: locId, pos: out, can_new_po: isOurAdmin(user!.role) });
+}
+async function handleCreateLocationPo(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!isOurAdmin(user!.role)) return json({ error: "Only Our Admin / Finance can create a PO." }, 403);
+  await ensureBudgetPoSchema(env);
+  const locId = path.split("/")[3];
+  const loc = await budgetLocationFor(env, user!, locId); if (!loc) return json({ error: "Not found" }, 404);
+  const body = await request.json().catch(() => ({})) as Record<string, unknown>;
+  const poNo = String(body.po_number || "").trim();
+  const amount = Number(body.amount);
+  if (!poNo) return json({ error: "PO number is required." }, 400);
+  if (!(amount > 0)) return json({ error: "Enter a PO amount." }, 400);
+  const scope = Array.isArray(body.category_scope) ? (body.category_scope as unknown[]).map(String) : [];
+  const id = uid();
+  await env.DB.prepare(`INSERT INTO client_pos (id,po_number,client_location_id,type,valid_from,valid_to,amount,category_scope,document_name,status,version)
+     VALUES (?,?,?,?,?,?,?,?,?,?,1)`)
+    .bind(id, poNo, locId, (body.type === "Standard" ? "Standard" : "Blanket"), String(body.valid_from || "") || null, String(body.valid_to || "") || null, amount, scope.join(","), String(body.document_name || "") || `${poNo}.pdf`, "Active").run();
+  await audit(env, user, "PO_CREATE", "client_po", id, undefined, `${poNo} ₹${Math.round(amount)}`);
+  return json({ ok: true, id, po_number: poNo }, 201);
+}
+async function handleAmendPo(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  if (!isOurAdmin(user!.role)) return json({ error: "Only Our Admin / Finance can amend a PO." }, 403);
+  await ensureBudgetPoSchema(env);
+  const poId = path.split("/")[3];
+  const po = await env.DB.prepare("SELECT * FROM client_pos WHERE id=?").bind(poId).first() as Record<string, unknown> | null;
+  if (!po) return json({ error: "PO not found" }, 404);
+  const body = await request.json().catch(() => ({})) as Record<string, unknown>;
+  const newAmount = Number(body.new_amount);
+  const reason = String(body.reason || "").trim();
+  if (!(newAmount > 0)) return json({ error: "Enter the new PO amount." }, 400);
+  if (!reason) return json({ error: "A reason is required for a PO amendment." }, 400);
+  await env.DB.prepare("INSERT INTO client_po_amendments (id,po_id,old_amount,new_amount,reason,changed_by,changed_by_name) VALUES (?,?,?,?,?,?,?)")
+    .bind(uid(), poId, Number(po.amount || 0), newAmount, reason, user!.sub, user!.name).run();
+  await env.DB.prepare("UPDATE client_pos SET amount=?, version=version+1 WHERE id=?").bind(newAmount, poId).run();
+  await audit(env, user, "PO_AMEND", "client_po", poId, String(po.amount), `${newAmount}: ${reason}`);
+  return json({ ok: true, amount: newAmount });
 }
 
 // ════════════════════════════════════════════════════════════════════
