@@ -511,7 +511,7 @@ async function showAdhocOrderModal() {
   } else {
     // P2c: a multi-location client chooses the ship-to location for the request.
     const locs = await loadOrderLocations(APP.user.client_id);
-    locBlock = orderLocationPickerHTML(locs, 'adhoc-location');
+    locBlock = orderLocationPickerHTML(locs, 'adhoc-location', 'onAdhocLocationChange');
   }
 
   openModal('⚡ Quick / Ad-hoc Request',
@@ -521,6 +521,7 @@ async function showAdhocOrderModal() {
      </div>
      ${clientPicker}
      ${locBlock}
+     <div id="po-wrap"></div>
      <div style="display:grid;grid-template-columns:1fr 72px 84px 34px;gap:8px;margin-bottom:6px;font-size:.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em">
        <div>Item / description</div><div>Qty</div><div>Unit</div><div></div>
      </div>
@@ -545,15 +546,22 @@ async function showAdhocOrderModal() {
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
      <button class="btn btn-gold" ${dataAct('submitAdhocOrder')}>Submit Request</button>`
   );
+  if (isClientRole) {
+    const locs = (APP._orderLocCache && APP._orderLocCache[APP.user.client_id]) || [];
+    const eff = (document.getElementById('adhoc-location')?.value) || ((locs.find(l => l.is_default) || locs[0] || {}).id) || '';
+    loadPoCtx(eff, 'po-wrap', { adhoc: true });
+  }
 }
 
-// Ad-hoc ops client picker changed → (re)load the ship-to location picker.
+// Ad-hoc ops client picker changed → (re)load the ship-to location + PO pickers.
 async function onAdhocClientChange(el) {
-  const wrap = document.getElementById('adhoc-loc-wrap'); if (!wrap) return;
-  if (!el.value) { wrap.innerHTML = ''; return; }
-  wrap.innerHTML = `<div class="u-muted" style="font-size:.8rem">Loading locations…</div>`;
+  const wrap = document.getElementById('adhoc-loc-wrap');
+  if (!el.value) { if (wrap) wrap.innerHTML = ''; await loadPoCtx('', 'po-wrap', { adhoc: true }); return; }
+  if (wrap) wrap.innerHTML = `<div class="u-muted" style="font-size:.8rem">Loading locations…</div>`;
   const locs = await loadOrderLocations(el.value);
-  wrap.innerHTML = orderLocationPickerHTML(locs, 'adhoc-location');
+  if (wrap) wrap.innerHTML = orderLocationPickerHTML(locs, 'adhoc-location', 'onAdhocLocationChange');
+  const eff = (document.getElementById('adhoc-location')?.value) || ((locs.find(l => l.is_default) || locs[0] || {}).id) || '';
+  await loadPoCtx(eff, 'po-wrap', { adhoc: true });
 }
 
 async function submitAdhocOrder() {
@@ -567,6 +575,11 @@ async function submitAdhocOrder() {
     clientId = document.getElementById('adhoc-client')?.value || '';
     if (!clientId) { showToast('Select a client', 'error'); return; }
   }
+
+  // Budget-PO: require a PO when the client mandates one (ad-hoc is unpriced, so the
+  // amount-based warnings don't fire — the PO is just linked).
+  const poPick = poCollect();
+  if (!poPick.ok) return;
 
   const notes = document.getElementById('adhoc-notes')?.value?.trim() || '';
   const items = lines.map(l => {
@@ -592,6 +605,8 @@ async function submitAdhocOrder() {
       order_type: 'Ad-Hoc',
       ...(notes ? { notes } : {}),
       ...(locationId ? { location_id: locationId } : {}),
+      ...(poPick.po_id ? { po_id: poPick.po_id } : {}),
+      ...(poPick.override ? { po_override_reason: poPick.override } : {}),
       ...(APP._adhocImage ? { image: APP._adhocImage } : {}),
     }),
   });
@@ -1179,22 +1194,87 @@ async function loadOrderLocations(clientId) {
 }
 // Render a "Deliver to" picker — only when the client has more than one location
 // (a single-location client resolves server-side, so no choice is needed).
-function orderLocationPickerHTML(locs, selectId) {
+function orderLocationPickerHTML(locs, selectId, changeFn) {
   if (!locs || locs.length <= 1) return '';
   const opts = locs.map(l => `<option value="${h(l.id)}"${l.is_default ? ' selected' : ''}>${h(l.display_name)}${l.shipping_address ? ' — ' + h(l.shipping_address) : ''}</option>`).join('');
   return `<div style="margin-bottom:16px">
     <label style="display:block;margin-bottom:6px;font-weight:600">📍 Deliver to</label>
-    <select id="${selectId}" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px">${opts}</select>
+    <select id="${selectId}" ${changeFn ? dataChangeEl(changeFn) : ''} style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px">${opts}</select>
   </div>`;
 }
-// Ops client picker changed: enable the submit button + (re)load the location picker.
+// The effective ship-to location id for the current order modal (the picker's value, or
+// the client's default when there is no picker).
+function effectiveOrderLoc(locs) { return (document.getElementById('order-location')?.value) || ((locs.find(l => l.is_default) || locs[0] || {}).id) || ''; }
+// Ops client picker changed: enable the submit button + (re)load the location picker
+// and the PO picker for the resolved ship-to location.
 async function onOrderClientChange(btnId, el) {
   const b = document.getElementById(btnId); if (b) b.disabled = !el.value;
-  const wrap = document.getElementById('order-loc-wrap'); if (!wrap) return;
-  if (!el.value) { wrap.innerHTML = ''; return; }
-  wrap.innerHTML = `<div class="u-muted" style="font-size:.8rem;margin-bottom:12px">Loading locations…</div>`;
+  const wrap = document.getElementById('order-loc-wrap');
+  if (!el.value) { if (wrap) wrap.innerHTML = ''; await loadPoCtx('', 'po-wrap'); return; }
+  if (wrap) wrap.innerHTML = `<div class="u-muted" style="font-size:.8rem;margin-bottom:12px">Loading locations…</div>`;
   const locs = await loadOrderLocations(el.value);
-  wrap.innerHTML = orderLocationPickerHTML(locs, 'order-location');
+  if (wrap) wrap.innerHTML = orderLocationPickerHTML(locs, 'order-location', 'onOrderLocationChange');
+  const effLoc = (document.getElementById('order-location')?.value) || ((locs.find(l => l.is_default) || locs[0] || {}).id) || '';
+  await loadPoCtx(effLoc, 'po-wrap');
+}
+
+// ── Budget-PO: pick a PO for the order and show warn-only checks. Every check warns
+//    and never blocks; proceeding past a warning needs a mandatory override reason.
+const PO_OVERRIDES = ['Client approved over email', 'Urgent / stock-out', 'PO top-up in progress', 'One-off exception', 'Other'];
+function _poCatMap() { const m = {}; (APP._catalog || []).forEach(c => { if (c && c.sku) m[c.sku] = c.category || ''; }); return m; }
+function cartCategories() { const m = _poCatMap(), s = new Set(); (APP.cart || []).forEach(i => { const c = m[i.sku]; if (c) s.add(c); }); return [...s]; }
+async function loadPoCtx(locId, wrapId, opts) {
+  opts = opts || {}; const wrap = document.getElementById(wrapId); if (!wrap) return;
+  if (!locId) { wrap.innerHTML = ''; APP._poCtx = null; return; }
+  wrap.innerHTML = `<div class="u-muted" style="font-size:.8rem;margin:6px 0">Loading POs…</div>`;
+  const [b, posR] = await Promise.all([api('/locations/' + locId + '/budget').catch(() => null), api('/locations/' + locId + '/pos').catch(() => null)]);
+  const today = new Date().toISOString().slice(0, 10);
+  const pos = ((posR && posR.pos) || []).filter(p => p.status === 'Active' && (!p.valid_to || p.valid_to >= today) && (!p.valid_from || p.valid_from <= today));
+  APP._poCtx = { locId, poMandatory: !!(b && b.settings && b.settings.po_mandatory), remaining: b ? b.remaining : null, pos, adhoc: !!opts.adhoc };
+  wrap.innerHTML = poPickerHTML();
+  poRecompute();
+}
+function poPickerHTML() {
+  const ctx = APP._poCtx; if (!ctx) return '';
+  const req = ctx.poMandatory;
+  return `<div style="margin-bottom:12px"><label style="display:block;margin-bottom:6px;font-weight:600">🧾 Purchase order ${req ? '<span style="color:var(--danger)">*</span>' : '<span style="color:var(--text-muted)">(optional)</span>'}</label>
+    <select id="po-sel" ${dataChange('poRecompute')} style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"><option value="">${req ? '— Select a PO —' : '— No PO —'}</option>
+      ${ctx.pos.map(p => `<option value="${h(p.id)}">${h(p.po_number)} · bal ${fmt(p.balance)} · exp ${h(p.valid_to || '—')}</option>`).join('')}</select>
+    <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px">Only Active POs in date range for this location are shown.</div></div>
+  <div id="po-warn"></div>
+  <div id="po-ovf" style="display:none;margin-bottom:12px"><label style="display:block;margin-bottom:6px;font-weight:600">Override reason <span style="color:var(--danger)">*</span></label>
+    <select id="po-ov" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"><option value="">— Why proceed past the warning? —</option>${PO_OVERRIDES.map(r => `<option>${h(r)}</option>`).join('')}</select></div>`;
+}
+function poOrderValue() { const ctx = APP._poCtx; if (ctx && ctx.adhoc) return 0; return APP.cart.reduce((s, i) => s + i.qty * i.unit_price, 0) * 1.18; }
+function poWarnings() {
+  const ctx = APP._poCtx; if (!ctx) return [];
+  const v = poOrderValue(), po = ctx.pos.find(p => p.id === (document.getElementById('po-sel') || {}).value) || null, w = [];
+  if (po) {
+    if (v > po.balance) w.push('Order exceeds PO balance by ' + fmt(v - po.balance) + '.');
+    if (po.category_scope && po.category_scope.length) { const out = cartCategories().filter(c => po.category_scope.indexOf(c) < 0); if (out.length) w.push('Out of PO scope: ' + out.join(', ') + '.'); }
+  }
+  if (ctx.remaining != null && v > ctx.remaining) w.push('Order exceeds remaining budget by ' + fmt(v - ctx.remaining) + '.');
+  return w;
+}
+function poRecompute() {
+  const w = poWarnings(), wEl = document.getElementById('po-warn'), ovf = document.getElementById('po-ovf'); if (!wEl) return;
+  if (w.length) { wEl.innerHTML = `<div style="background:var(--warning-bg,#fdefd4);color:#7a4a00;border-radius:8px;padding:9px 11px;font-size:.8rem;margin:0 0 10px"><b>Warns (won’t block):</b><ul style="margin:4px 0 0;padding-left:18px">${w.map(x => '<li>' + h(x) + '</li>').join('')}</ul></div>`; if (ovf) ovf.style.display = ''; }
+  else { wEl.innerHTML = ''; if (ovf) { ovf.style.display = 'none'; const s = document.getElementById('po-ov'); if (s) s.value = ''; } }
+}
+function onOrderLocationChange(el) { loadPoCtx(el.value, 'po-wrap'); }
+function onAdhocLocationChange(el) { loadPoCtx(el.value, 'po-wrap', { adhoc: true }); }
+// Collect the chosen PO + override for an order submit; returns {ok, po_id, override} or
+// {ok:false} after showing the blocking-reason toast (mandatory PO / missing override).
+function poCollect() {
+  const ctx = APP._poCtx;
+  const poId = (document.getElementById('po-sel') || {}).value || '';
+  if (ctx && ctx.poMandatory && !poId) { showToast('A PO is required for this client', 'error'); return { ok: false }; }
+  if (poId && poWarnings().length) {
+    const ov = (document.getElementById('po-ov') || {}).value || '';
+    if (!ov) { showToast('Choose an override reason to proceed past the warning', 'error'); return { ok: false }; }
+    return { ok: true, po_id: poId, override: ov };
+  }
+  return { ok: true, po_id: poId || '', override: '' };
 }
 
 async function submitOrder() {
@@ -1211,17 +1291,19 @@ async function submitOrder() {
     // multi-location account still chooses the ship-to location.
     const clientName = APP.user.org || 'your account';
     const locs = await loadOrderLocations(APP.user.client_id);
-    const picker = orderLocationPickerHTML(locs, 'order-location');
+    const picker = orderLocationPickerHTML(locs, 'order-location', 'onOrderLocationChange');
     openModal('Confirm Order',
       `<div style="margin-bottom:16px;padding:12px;background:var(--bg);border-radius:8px;border:1px solid var(--border)">
         <div style="font-size:.8rem;color:var(--text-muted);margin-bottom:2px">Ordering for</div>
         <div style="font-weight:700;font-size:1rem">${h(clientName)}</div>
       </div>
       ${picker}
+      <div id="po-wrap"></div>
       ${summary}`,
       `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
        <button class="btn btn-gold" ${dataAct('confirmOrder')}>Confirm & Submit</button>`
     );
+    loadPoCtx(effectiveOrderLoc(locs), 'po-wrap');
   } else {
     // Ops / admin roles pick the client from the list; the location picker loads
     // into order-loc-wrap once a client is chosen.
@@ -1237,6 +1319,7 @@ async function submitOrder() {
         </select>
       </div>
       <div id="order-loc-wrap"></div>
+      <div id="po-wrap"></div>
       ${summary}`,
       `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
        <button id="confirm-order-btn" class="btn btn-gold" ${dataAct('confirmOrder')} disabled>Confirm & Submit</button>`
@@ -1248,6 +1331,11 @@ async function confirmOrder(saveAsDraft) {
   const isClientRole = ['client_admin','client_user','client_approver'].includes(APP.user?.role);
   const clientId = isClientRole ? (APP.user.client_id || '__self__') : document.getElementById('order-client')?.value;
   if (!isClientRole && !clientId) { showToast('Select a client', 'error'); return; }
+
+  // Budget-PO: on a real submit, require a PO when the client mandates one and an
+  // override reason when a warn-only check fires. Drafts skip the PO (chosen at submit).
+  let poPick = { ok: true, po_id: '', override: '' };
+  if (!saveAsDraft) { poPick = poCollect(); if (!poPick.ok) return; }
 
   // The order reference is auto-generated server-side (defaults to the order
   // number), so nothing is collected here. An explicit value is still forwarded
@@ -1274,12 +1362,15 @@ async function confirmOrder(saveAsDraft) {
       ...(needByDate ? { need_by_date: needByDate } : {}),
       ...(orderPeriod ? { order_period: orderPeriod } : {}),
       ...(locationId ? { location_id: locationId } : {}),
+      ...(poPick.po_id ? { po_id: poPick.po_id } : {}),
+      ...(poPick.override ? { po_override_reason: poPick.override } : {}),
       ...(saveAsDraft ? { save_as_draft: true } : {}),
     }),
   });
 
   closeModal();
   if (result) {
+    APP._poCtx = null;
     APP.cart = [];
     persistCart();
     APP._orderImage = null;
