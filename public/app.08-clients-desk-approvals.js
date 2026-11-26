@@ -1323,62 +1323,248 @@ function viewClientModal(c) {
      <button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
 }
 
-// Budget tile → per-client budget view (spend vs limits + monthly history). Scoped to
-// the client the tile belongs to (plus its locations, by display name). Admin-only.
+// Budget tile → the per-client-location Budget & PO page (budget vs committed/actual,
+// POs, revision history). Backed by /api/locations/:id/budget|pos|budget/history.
+const BPO_CATS = ['Tea','Coffee','Milk','Packaging','Consumables'];
+const BPO_REASONS = ['New outlet volume','Seasonal demand','New outlet opening','Price revision','Correction / true-up','Other'];
+function bpoIsInternal() { return ['super_admin','ops_admin','ops_manager'].includes(APP.user?.role); }
+function bpoUsedColor(p) { return p > 100 ? 'var(--danger)' : p >= 80 ? '#d97706' : 'var(--success)'; }
+
 async function clientBudgetById(id) {
   const c = APP._clientById && APP._clientById[id];
-  if (!c) { showToast('Client not found', 'error'); return; }
-  if (!['super_admin','ops_admin','ops_manager'].includes(APP.user?.role)) {
-    showToast("You don't have permission to view budgets", 'error'); return;
-  }
-  openModal('Budget', `<div class="loading-state"><div class="spinner"></div><p>Loading budget…</p></div>`,
-    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
-  const [orders, locData] = await Promise.all([
-    api('/orders?client_id=' + encodeURIComponent(id)).catch(() => []),
-    api('/clients/' + encodeURIComponent(id) + '/order-locations').catch(() => null),
-  ]);
-  clientBudgetModal(c, orders || [], (locData && locData.locations) || []);
+  const main = document.getElementById('main-content'); if (!main) return;
+  main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading budget…</p></div>`;
+  const r = await api('/clients/' + encodeURIComponent(id) + '/order-locations').catch(() => null);
+  const locsAll = (r && r.locations) || [];
+  if (!locsAll.length) { main.innerHTML = `<div class="u-muted" style="padding:24px">No locations for ${h((c && c.name) || 'this client')} yet. Add one via 🏢 Locations.</div>`; return; }
+  APP._bpo = { clientId: id, clientName: (c && c.name) || '', locId: (locsAll.find(l => l.is_default) || locsAll[0]).id, locs: locsAll, period: '', tab: 'budget' };
+  bpoLoad();
 }
 
-function clientBudgetModal(c, orders, locations) {
-  const budget = c.monthly_budget || 0;
-  const spent  = c.spent_this_month || 0;
-  const pct    = budget > 0 ? Math.min(100, Math.round(spent / budget * 100)) : 0;
-  const remain = Math.max(0, budget - spent);
-  const color  = pct > 90 ? 'var(--danger)' : pct > 75 ? '#f59e0b' : 'var(--success)';
-  const closed = (orders || []).filter(o => o.status === 'CLOSED');
-  const active = (orders || []).filter(o => !['CLOSED','CANCELLED'].includes(o.status));
-  const byMonth = {};
-  closed.forEach(o => { const m = (o.created_at || '').slice(0, 7); if (m) byMonth[m] = (byMonth[m] || 0) + (o.grand_total || 0); });
-  const months = Object.keys(byMonth).sort().slice(-6);
-  const maxM = Math.max(1, ...months.map(m => byMonth[m]));
-  const title = (c.display_name && c.display_name !== c.name) ? `${c.display_name} — ${c.name}` : c.name;
-  const locLine = (locations && locations.length) ? `📍 ${locations.map(l => h(l.display_name)).join(' · ')}` : '';
-  const body = `
-    ${locLine ? `<div style="font-size:.8rem;color:var(--text-muted);margin-bottom:12px">${locLine}</div>` : ''}
-    <div style="display:flex;justify-content:space-between;font-size:.8rem;margin-bottom:6px"><span>Budget Used</span><span style="font-weight:700;color:${color}">${pct}% · ${fmt(spent)} of ${fmt(budget)}</span></div>
-    <div style="background:var(--border);height:10px;border-radius:5px;overflow:hidden;margin-bottom:16px"><div style="height:100%;width:${pct}%;background:${color};border-radius:5px;transition:width .4s"></div></div>
-    <div class="tile-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:16px">
-      ${tileHtml({label:'Spent This Month', value:fmt(spent), sub:`${pct}% of budget`, accent:color})}
-      ${tileHtml({label:'Remaining', value:fmt(remain), sub:'this month', accent:'var(--primary)'})}
-      ${tileHtml({label:'Monthly Budget', value:fmt(budget), accent:'var(--success)'})}
+async function bpoLoad() {
+  const s = APP._bpo; const main = document.getElementById('main-content'); if (!main || !s) return;
+  main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading budget…</p></div>`;
+  const q = s.period ? ('?period=' + encodeURIComponent(s.period)) : '';
+  const [b, posR, hist] = await Promise.all([
+    api('/locations/' + s.locId + '/budget' + q).catch(() => null),
+    api('/locations/' + s.locId + '/pos').catch(() => null),
+    api('/locations/' + s.locId + '/budget/history').catch(() => null),
+  ]);
+  if (!b || b.error) { main.innerHTML = `<div class="u-muted" style="padding:24px">${h((b && b.error) || 'Could not load the budget.')}</div>`; return; }
+  s.data = { b, pos: (posR && posR.pos) || [], hist: (hist && hist.revisions) || [] };
+  bpoRender();
+}
+
+function bpoRender() {
+  const s = APP._bpo, b = s.data.b, main = document.getElementById('main-content'); if (!main) return;
+  const used = b.budget.amount ? Math.round((b.committed + b.actual) / b.budget.amount * 100) : 0;
+  const col = bpoUsedColor(used);
+  const sp = b.budget.amount ? Math.min(100, b.actual / b.budget.amount * 100) : 0;
+  const cm = b.budget.amount ? Math.min(100 - sp, b.committed / b.budget.amount * 100) : 0;
+  const locSwitch = s.locs.length > 1
+    ? `<select ${dataChangeEl('bpoSetLoc')} style="padding:7px 10px;border:1px solid var(--border);border-radius:8px;font-weight:600">${s.locs.map(l => `<option value="${h(l.id)}"${l.id === s.locId ? ' selected' : ''}>${h(l.display_name)}</option>`).join('')}</select>`
+    : `<b>${h(b.display_name)}</b>`;
+  const periodSeg = ['Monthly','Quarterly','Yearly'].map(p => `<button class="btn btn-sm" ${dataAct('bpoSetPeriod', p)} style="${b.view.period_type === p ? 'background:var(--navy);color:#fff' : ''}">${p}</button>`).join('');
+  const kpis = `<div class="tile-grid" style="grid-template-columns:repeat(4,1fr);margin:14px 0">
+    ${tileHtml({ label:'Budget', value:fmt(b.budget.amount), sub:b.budget.period_type, accent:'var(--navy)' })}
+    ${tileHtml({ label:'Committed', value:fmt(b.committed), sub:'open orders', accent:'#d97706' })}
+    ${tileHtml({ label:'Actual', value:fmt(b.actual), sub:'delivered / invoiced', accent:'var(--danger)' })}
+    ${tileHtml({ label:'Remaining', value:fmt(b.remaining), sub:used + '% used', accent:b.remaining < 0 ? 'var(--danger)' : 'var(--success)' })}
+  </div>`;
+  const bar = `<div style="display:flex;height:11px;border-radius:7px;overflow:hidden;border:1px solid var(--border);background:var(--bg)">
+      <div style="width:${sp}%;background:var(--danger)"></div><div style="width:${cm}%;background:#d97706"></div></div>
+    <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:.78rem"><span class="u-muted">Remaining = Budget − Committed − Actual · floor ${fmt(b.floor)}</span><span style="font-weight:700;color:${col}">${used}% used</span></div>`;
+  const actions = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 4px">
+    ${b.can_edit ? `<button class="btn btn-primary" ${dataAct('bpoEdit')}>✎ Edit budget</button>` : '<span class="u-muted" style="font-size:.8rem;align-self:center">🔒 Read-only</span>'}
+    ${b.can_new_po ? `<button class="btn btn-secondary" ${dataAct('bpoNewPo')}>＋ New PO</button>` : ''}
+    ${b.can_approval ? `<button class="btn btn-secondary" ${dataAct('bpoApproval')}>⚙ Approval</button>` : ''}
+  </div>`;
+  const tabs = `<div style="display:flex;gap:4px;border-bottom:1px solid var(--border);margin:16px 0">${['budget','pos','history'].map(t => `<button ${dataAct('bpoSetTab', t)} style="font-weight:600;font-size:.85rem;background:none;border:0;border-bottom:2px solid ${s.tab === t ? 'var(--primary)' : 'transparent'};color:${s.tab === t ? 'var(--primary)' : 'var(--text-muted)'};padding:9px 13px;cursor:pointer;margin-bottom:-1px">${({ budget:'Budget', pos:'POs', history:'History' }[t])}</button>`).join('')}</div>`;
+  main.innerHTML =
+    `<div style="font-size:.84rem;color:var(--text-muted);margin-bottom:10px"><span style="cursor:pointer;font-weight:600;color:var(--primary)" ${dataAct('bpoBack')}>← Client Directory</span> › Budget &amp; PO</div>
+     <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+       <div style="font-size:1.2rem;font-weight:800;color:var(--navy)">${locSwitch}</div>
+       <div style="display:flex;gap:6px;align-items:center"><span class="u-muted" style="font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;font-weight:600">Period</span>${periodSeg}</div>
+     </div>
+     <div class="u-muted" style="font-size:.8rem;margin-top:4px">Showing <b>${h(b.view.label)}</b> · ${h(s.clientName)} · ${b.settings.po_mandatory ? 'PO required' : 'PO optional'}</div>
+     ${kpis}<div style="padding:16px;background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08)">${bar}</div>${actions}${tabs}
+     <div id="bpo-panel"></div>`;
+  bpoPanel();
+}
+
+function bpoPanel() {
+  const el = document.getElementById('bpo-panel'); if (!el) return;
+  const s = APP._bpo;
+  if (s.tab === 'pos') el.innerHTML = bpoPosPanel();
+  else if (s.tab === 'history') el.innerHTML = bpoHistPanel();
+  else el.innerHTML = bpoBudgetPanel();
+}
+function bpoBudgetPanel() {
+  const b = APP._bpo.data.b, ap = b.settings, active = ap.approval_required && ap.approver_user_id;
+  return `<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:stretch">
+    <div style="flex:2 1 320px;min-width:0;padding:16px;background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+      <h3 style="margin:0 0 10px;font-size:1rem;color:var(--navy)">This period</h3>
+      ${bpoKV('Budget', fmt(b.budget.amount))}${bpoKV('Committed + Actual (floor)', fmt(b.floor))}${bpoKV('Remaining', fmt(b.remaining))}
+      ${bpoKV('Alert thresholds', '80% and 100%')}${bpoKV('Set by', b.budget.created_by_type === 'internal' ? 'Our Admin (on behalf)' : 'Client')}
+      <div style="margin-top:12px;background:var(--warning-bg,#fdefd4);border-radius:10px;padding:10px 12px;font-size:.8rem">⚠️ Over-budget is <b>warn-only</b> — orders above budget warn and are never blocked.</div>
     </div>
-    <div style="font-weight:700;color:var(--navy);margin:4px 0 8px">Limits</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">
-      <div><div class="u-muted-xs">Approval Threshold</div><div class="u-b600">${fmt(c.approval_threshold)}</div></div>
-      <div><div class="u-muted-xs">Active Orders</div><div class="u-b600">${active.length}</div></div>
-      <div><div class="u-muted-xs">Credit Limit</div><div class="u-b600">${c.credit_limit ? fmt(c.credit_limit) : '—'}</div></div>
-      <div><div class="u-muted-xs">Credit Used</div><div class="u-b600">${c.credit_used ? fmt(c.credit_used) : '—'}</div></div>
-    </div>
-    <div style="font-weight:700;color:var(--navy);margin:4px 0 8px">Spend history <span style="font-weight:400;color:var(--text-muted);font-size:.78rem">(closed orders)</span></div>
-    ${months.length ? months.map(m => `
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
-        <div style="width:72px;font-size:.78rem;color:var(--text-muted)">${new Date(m + '-01').toLocaleDateString('en-IN', { month:'short', year:'2-digit' })}</div>
-        <div style="flex:1;background:var(--border);height:8px;border-radius:4px;overflow:hidden"><div style="height:100%;width:${Math.round(byMonth[m] / maxM * 100)}%;background:var(--primary);border-radius:4px"></div></div>
-        <div style="width:96px;text-align:right;font-size:.78rem;font-weight:600">${fmt(byMonth[m])}</div>
-      </div>`).join('') : `<div class="u-muted" style="font-size:.82rem">No closed orders yet.</div>`}
-  `;
-  openModal(`Budget — ${h(title)}`, body, `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`);
+    <div style="flex:1 1 230px;min-width:0;padding:16px;display:flex;flex-direction:column;gap:10px;background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+      <h3 style="margin:0;font-size:1rem;color:var(--navy)">Approval</h3>
+      <div class="u-muted" style="font-size:.82rem">${active ? `On — changes over <b>${ap.threshold_pct}%</b> need an approver.` : (ap.approval_required ? 'Switched on but no approver — stays off.' : 'Off — edits apply immediately.')}</div>
+      ${b.can_approval ? `<button class="btn btn-secondary btn-sm" ${dataAct('bpoApproval')}>Approval settings</button>` : '<span class="u-muted" style="font-size:.78rem">Only the Client Admin can change this.</span>'}
+      <div class="u-muted" style="font-size:.76rem;margin-top:auto">🔗 PO amount changes are separate amendments (Our Admin / Finance), linked by PO reference.</div>
+    </div></div>`;
+}
+function bpoKV(k, v) { return `<div style="display:flex;gap:12px;padding:5px 0;font-size:.85rem"><div class="u-muted" style="width:150px;flex-shrink:0">${k}</div><div style="font-weight:600">${v}</div></div>`; }
+
+function bpoPosPanel() {
+  const s = APP._bpo, pos = s.data.pos;
+  const rows = pos.length ? pos.map(p => {
+    const up = p.amount ? Math.round((p.committed + p.actual) / p.amount * 100) : 0;
+    return `<tr>
+      <td><b>${h(p.po_number)}</b><div class="u-muted" style="font-size:.72rem">v${p.version} · 📎 ${h(p.document_name || '')}</div></td>
+      <td style="font-size:.8rem">${h(p.type)}</td>
+      <td style="font-size:.8rem">${(p.category_scope && p.category_scope.length) ? p.category_scope.map(h).join(', ') : '<span class="u-muted">All</span>'}</td>
+      <td style="text-align:right">${fmt(p.amount)}</td><td style="text-align:right">${fmt(p.committed)}</td><td style="text-align:right">${fmt(p.actual)}</td>
+      <td style="text-align:right"><b>${fmt(p.balance)}</b></td>
+      <td style="font-size:.8rem">${h(p.valid_to || '—')}</td>
+      <td style="min-width:90px"><div style="height:6px;border-radius:4px;background:var(--bg);overflow:hidden"><div style="height:100%;width:${Math.min(100, up)}%;background:${bpoUsedColor(up)}"></div></div><div class="u-muted" style="font-size:.72rem">${up}%</div></td>
+      <td><span class="badge" style="background:var(--bg);border:1px solid var(--border);font-size:.68rem">${h(p.status)}</span>${s.data.b.can_new_po && p.status === 'Active' ? ` <button class="btn btn-sm" ${dataAct('bpoAmend', p.id, p.po_number, p.amount)} style="font-size:.66rem;padding:2px 7px">Amend</button>` : ''}</td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="10" class="u-muted" style="text-align:center;padding:22px">No POs for this location.</td></tr>`;
+  return `${s.data.b.can_new_po ? `<div style="margin-bottom:10px"><button class="btn btn-sm btn-primary" ${dataAct('bpoNewPo')}>＋ New PO</button></div>` : ''}
+    <div style="overflow-x:auto;border:1px solid var(--border);border-radius:12px"><table style="width:100%;min-width:900px;border-collapse:collapse;font-size:.82rem">
+    <thead><tr>${['PO no.','Type','Scope','Total','Committed','Actual','Balance','Valid to','Utilisation','Status'].map(c => `<th style="text-align:left;padding:9px 11px;background:var(--bg);font-size:.66rem;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted)">${c}</th>`).join('')}</tr></thead>
+    <tbody>${rows}</tbody></table></div>
+    <div class="u-muted" style="font-size:.78rem;margin-top:10px">🔔 Alerts fire at 80% and 100% PO use and 30 days before expiry.</div>`;
+}
+
+function bpoHistPanel() {
+  const h2 = APP._bpo.data.hist;
+  const rows = h2.length ? h2.map(r => {
+    const d = (r.new_amount || 0) - (r.old_amount || 0), pct = r.old_amount ? Math.round(d / r.old_amount * 100) : 0;
+    const chg = !r.old_amount ? '<span class="badge" style="background:var(--info-bg,#e7f1fb);color:#2563eb;font-size:.66rem">New</span>'
+      : d === 0 ? '<span class="u-muted">—</span>' : `<span style="color:${d > 0 ? 'var(--success)' : 'var(--danger)'};font-weight:600">${d > 0 ? '▲ +' : '▼ '}${fmt(Math.abs(d))} (${d > 0 ? '+' : ''}${pct}%)</span>`;
+    const src = r.source === 'behalf' ? '<span class="badge" style="background:#efe6fb;color:#7a4bd0;font-size:.66rem">On behalf</span>' : '<span class="badge" style="background:var(--info-bg,#e9ebff);color:var(--primary);font-size:.66rem">Direct</span>';
+    const st = r.status === 'pending' ? '<span class="badge" style="background:var(--warning-bg,#fdefd4);color:#9a5b00;font-size:.66rem">⏳ Pending</span>' : '<span class="badge" style="background:var(--success-soft-bg,#e3f5ec);color:var(--success);font-size:.66rem">✓ Applied</span>';
+    return `<tr>
+      <td class="u-muted" style="font-size:.76rem;white-space:nowrap">${h(bpoDT(r.created_at))}<div style="font-size:.7rem">eff. ${h(r.effective_from || '')}</div></td>
+      <td style="font-size:.8rem">${h(r.changed_by_name || '')}<div class="u-muted" style="font-size:.7rem">${h(r.changed_role || '')}</div></td>
+      <td>${src}</td><td style="font-size:.8rem">${h(r.period_label || '')}</td>
+      <td style="white-space:nowrap">${r.old_amount ? fmt(r.old_amount) : '—'} → <b>${fmt(r.new_amount)}</b></td>
+      <td>${chg}</td>
+      <td style="font-size:.8rem">${r.po_ref ? '<b>' + h(r.po_ref) + '</b>' : '<span class="u-muted">—</span>'}</td>
+      <td style="font-size:.8rem">${h(r.reason || '')}${r.note ? `<div class="u-muted" style="font-size:.7rem">${h(r.note)}</div>` : ''}${r.attachment_name ? `<div class="u-muted" style="font-size:.7rem">📎 ${h(r.attachment_name)}</div>` : ''}</td>
+      <td>${st}</td></tr>`;
+  }).join('') : `<tr><td colspan="9" class="u-muted" style="text-align:center;padding:22px">No revisions yet.</td></tr>`;
+  return `<div class="u-muted" style="font-size:.8rem;margin-bottom:10px">Append-only — revisions can't be edited or deleted.</div>
+    <div style="overflow-x:auto;border:1px solid var(--border);border-radius:12px"><table style="width:100%;min-width:860px;border-collapse:collapse;font-size:.82rem">
+    <thead><tr>${['When','Changed by','Source','Period','Old → New','Change','PO ref','Reason','Status'].map(c => `<th style="text-align:left;padding:9px 11px;background:var(--bg);font-size:.66rem;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted)">${c}</th>`).join('')}</tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
+}
+function bpoDT(s) { if (!s) return ''; const d = new Date(String(s).replace(' ', 'T') + (String(s).endsWith('Z') ? '' : 'Z')); return isNaN(d) ? String(s) : d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) + ', ' + d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }); }
+
+function bpoBack() { navigate('clients'); }
+function bpoSetTab(t) { APP._bpo.tab = t; bpoRender(); }
+function bpoSetPeriod(p) { APP._bpo.period = p; bpoLoad(); }
+function bpoSetLoc(el) { APP._bpo.locId = el.value; APP._bpo.period = ''; APP._bpo.tab = 'budget'; bpoLoad(); }
+
+function bpoEdit() {
+  const b = APP._bpo.data.b, onBehalf = bpoIsInternal(), cur = b.budget.amount;
+  openModal('Edit budget' + (onBehalf ? ' · <span class="badge" style="background:#efe6fb;color:#7a4bd0">On behalf of client</span>' : ''),
+    `<div class="u-muted" style="font-size:.8rem;margin-bottom:10px">${h(b.display_name)} · current <b>${fmt(cur)}</b> · ${h(b.budget.period_type)} · floor ${fmt(b.floor)}</div>
+     <div class="form-group"><label>New amount</label><input type="number" id="bp-amt" value="${cur}"><div id="bp-amt-err" style="color:var(--danger);font-size:.74rem;font-weight:600;margin-top:4px"></div></div>
+     <div id="bp-change" style="font-size:.84rem;margin-bottom:8px"></div>
+     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+       <div class="form-group"><label>Period type</label><select id="bp-pt">${['Monthly','Quarterly','Yearly'].map(p => `<option${p === b.budget.period_type ? ' selected' : ''}>${p}</option>`).join('')}</select></div>
+       <div class="form-group"><label>PO reference ${onBehalf ? '<span style="color:var(--danger)">*</span>' : '<span class="u-muted">(optional)</span>'}</label><input type="text" id="bp-po" placeholder="PO-26-0142"></div>
+     </div>
+     <div class="form-group"><label>Effective from</label><select id="bp-eff"><option value="now">Immediately</option><option value="next">Start of next period</option></select></div>
+     <div class="form-group"><label>Reason <span style="color:var(--danger)">*</span></label><select id="bp-reason"><option value="">— Select —</option>${BPO_REASONS.map(r => `<option>${r}</option>`).join('')}</select></div>
+     <div class="form-group"><label>Note</label><textarea id="bp-note" rows="2"></textarea></div>
+     <div class="form-group"><label>Attachment</label><input type="file" id="bp-file"></div>
+     <div id="bp-appr" class="u-muted" style="font-size:.8rem"></div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button><button class="btn btn-primary" ${dataAct('bpoSaveEdit')}>Save revision</button>`);
+  const upd = () => {
+    const n = parseFloat(document.getElementById('bp-amt').value) || 0, d = n - cur, pct = cur ? Math.round(d / cur * 100) : 0;
+    document.getElementById('bp-change').innerHTML = d === 0 ? '<span class="u-muted">No change</span>' : `<span style="color:${d > 0 ? 'var(--success)' : 'var(--danger)'};font-weight:600">${d > 0 ? '+' : ''}${fmt(d)} (${d > 0 ? '+' : ''}${pct}%)</span>`;
+    document.getElementById('bp-amt-err').textContent = n < b.floor ? `Minimum allowed is ${fmt(b.floor)} (committed + actual).` : '';
+    const ap = b.settings, act = ap.approval_required && ap.approver_user_id, needs = act && Math.abs(pct) >= ap.threshold_pct && d !== 0;
+    document.getElementById('bp-appr').innerHTML = act ? (needs ? `⏳ Over the ${ap.threshold_pct}% threshold — saves as <b>Pending approval</b>.` : `Within the ${ap.threshold_pct}% threshold — applies immediately.`) : '';
+  };
+  const amt = document.getElementById('bp-amt'); amt.oninput = upd; document.getElementById('bp-eff').onchange = upd; upd();
+}
+async function bpoSaveEdit() {
+  const b = APP._bpo.data.b, onBehalf = bpoIsInternal();
+  const n = parseFloat(document.getElementById('bp-amt').value) || 0;
+  const reason = document.getElementById('bp-reason').value, po = document.getElementById('bp-po').value.trim();
+  if (n < b.floor) { showToast(`Minimum allowed is ${fmt(b.floor)}`, 'error'); return; }
+  if (!reason) { showToast('A reason is required', 'error'); return; }
+  if (onBehalf && !po) { showToast('A PO reference is required (on behalf of client)', 'error'); return; }
+  const f = document.getElementById('bp-file'); const fname = (f.files && f.files[0]) ? f.files[0].name : '';
+  const body = { new_amount: n, period_type: document.getElementById('bp-pt').value, po_ref: po, reason, note: document.getElementById('bp-note').value.trim(), attachment_name: fname, effective_kind: document.getElementById('bp-eff').value };
+  const r = await api('/locations/' + APP._bpo.locId + '/budget/revise', { method: 'POST', body: JSON.stringify(body) }).catch(() => null);
+  if (!r || r.error) { showToast((r && r.error) || 'Could not save', 'error'); return; }
+  closeModal(); showToast(r.status === 'pending' ? 'Saved as Pending approval — Client Admin notified.' : 'Revision applied — Client Admin notified' + (onBehalf ? ' · Account Manager copied.' : '.'));
+  APP._bpo.tab = 'history'; bpoLoad();
+}
+
+function bpoNewPo() {
+  openModal('New purchase order',
+    `<div class="u-muted" style="font-size:.8rem;margin-bottom:8px">For ${h(APP._bpo.data.b.display_name)}</div>
+     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+       <div class="form-group"><label>PO number <span style="color:var(--danger)">*</span></label><input id="np-no" placeholder="PO-26-0160"></div>
+       <div class="form-group"><label>Type</label><select id="np-type"><option>Blanket</option><option>Standard</option></select></div>
+       <div class="form-group"><label>Valid from</label><input type="date" id="np-from"></div>
+       <div class="form-group"><label>Valid to</label><input type="date" id="np-to"></div>
+     </div>
+     <div class="form-group"><label>Total amount <span style="color:var(--danger)">*</span></label><input type="number" id="np-amt" placeholder="0"></div>
+     <div class="form-group"><label>Category scope <span class="u-muted">(none = all)</span></label><div style="display:flex;flex-wrap:wrap;gap:8px">${BPO_CATS.map(c => `<label style="display:inline-flex;gap:5px;align-items:center;font-size:.82rem;border:1px solid var(--border);border-radius:999px;padding:5px 10px"><input type="checkbox" class="np-cat" value="${c}">${c}</label>`).join('')}</div></div>
+     <div class="form-group"><label>PO document (PDF)</label><input type="file" id="np-doc" accept="application/pdf"></div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button><button class="btn btn-primary" ${dataAct('bpoSaveNewPo')}>Create PO</button>`);
+}
+async function bpoSaveNewPo() {
+  const no = document.getElementById('np-no').value.trim(), amt = parseFloat(document.getElementById('np-amt').value) || 0;
+  if (!no) { showToast('PO number is required', 'error'); return; }
+  if (!(amt > 0)) { showToast('Enter a PO amount', 'error'); return; }
+  const scope = [].slice.call(document.querySelectorAll('.np-cat:checked')).map(c => c.value);
+  const f = document.getElementById('np-doc'); const fname = (f.files && f.files[0]) ? f.files[0].name : '';
+  const body = { po_number: no, type: document.getElementById('np-type').value, valid_from: document.getElementById('np-from').value, valid_to: document.getElementById('np-to').value, amount: amt, category_scope: scope, document_name: fname };
+  const r = await api('/locations/' + APP._bpo.locId + '/pos', { method: 'POST', body: JSON.stringify(body) }).catch(() => null);
+  if (!r || r.error) { showToast((r && r.error) || 'Could not create PO', 'error'); return; }
+  closeModal(); showToast(no + ' created — Active.'); APP._bpo.tab = 'pos'; bpoLoad();
+}
+function bpoAmend(poId, poNo, cur) {
+  openModal('Amend ' + h(poNo),
+    `<div class="u-muted" style="font-size:.8rem;margin-bottom:8px">Current amount <b>${fmt(cur)}</b>. An amendment keeps its own version history.</div>
+     <div class="form-group"><label>New amount <span style="color:var(--danger)">*</span></label><input type="number" id="am-amt" value="${cur}"></div>
+     <div class="form-group"><label>Reason <span style="color:var(--danger)">*</span></label><input id="am-reason" placeholder="e.g. Client PO top-up"></div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button><button class="btn btn-primary" ${dataAct('bpoSaveAmend', poId)}>Save amendment</button>`);
+}
+async function bpoSaveAmend(poId) {
+  const amt = parseFloat(document.getElementById('am-amt').value) || 0, reason = document.getElementById('am-reason').value.trim();
+  if (!(amt > 0) || !reason) { showToast('Enter the new amount and a reason', 'error'); return; }
+  const r = await api('/client-pos/' + poId + '/amend', { method: 'POST', body: JSON.stringify({ new_amount: amt, reason }) }).catch(() => null);
+  if (!r || r.error) { showToast((r && r.error) || 'Could not amend', 'error'); return; }
+  closeModal(); showToast('PO amended.'); bpoLoad();
+}
+async function bpoApproval() {
+  const b = APP._bpo.data.b, ap = b.settings;
+  const users = ((await api('/users').catch(() => [])) || []).filter(u => u.role === 'client_approver' && u.client_id === APP._bpo.clientId);
+  const opts = users.length ? users.map(u => `<option value="${h(u.id)}"${ap.approver_user_id === u.id ? ' selected' : ''}>${h(u.name)} (Client Approver)</option>`).join('') : '';
+  openModal('Approval settings',
+    `<div class="u-muted" style="font-size:.8rem;margin-bottom:8px">${h(APP._bpo.clientName)} · applies to all its locations</div>
+     <label style="display:flex;gap:8px;align-items:center;margin-bottom:12px"><input type="checkbox" id="ap-en"${ap.approval_required ? ' checked' : ''}> <b>Approval required</b></label>
+     <div class="form-group"><label>Approve changes greater than (%)</label><input type="number" id="ap-thr" value="${ap.threshold_pct}" min="1" max="100" style="max-width:120px"></div>
+     <div class="form-group"><label>Second approver <span style="color:var(--danger)">*</span></label><select id="ap-appr"><option value="">— Nominate a Client Approver —</option>${opts}</select>
+       <div class="u-muted" style="font-size:.74rem;margin-top:4px">${users.length ? "The requester can't approve their own change — nominate someone, or approval stays off." : 'No Client Approver exists for this client yet. Add one in Users, then nominate here; until then approval stays off.'}</div></div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button><button class="btn btn-primary" ${dataAct('bpoSaveApproval')}>Save</button>`);
+}
+async function bpoSaveApproval() {
+  const body = { approval_required: document.getElementById('ap-en').checked, threshold_pct: parseInt(document.getElementById('ap-thr').value, 10) || 20, approver_user_id: document.getElementById('ap-appr').value || '' };
+  const r = await api('/clients/' + APP._bpo.clientId + '/budget-settings', { method: 'PUT', body: JSON.stringify(body) }).catch(() => null);
+  if (!r || r.error) { showToast((r && r.error) || 'Could not save', 'error'); return; }
+  closeModal(); showToast(r.approval_required ? 'Approval turned on.' : (body.approval_required ? 'Saved — add an approver to activate.' : 'Approval turned off.')); bpoLoad();
 }
 
 async function editClientModal(c) {
