@@ -7335,6 +7335,7 @@ export default {
       if (path.match(/^\/api\/client-pos\/[^/]+\/amend$/)         && method==="POST") return handleAmendPo(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/budget-settings$/)  && method==="GET")  return handleGetBudgetSettings(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/budget-settings$/)  && method==="PUT")  return handlePutBudgetSettings(request,env,path);
+      if (path==="/api/budget-po/reports"                        && method==="GET")  return handleBudgetPoReports(request,env);
       if (path.match(/^\/api\/clients\/[^/]+\/locations$/) && method==="POST") return handleAddClientLocation(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/locations\/[^/]+$/) && method==="PATCH") return handlePatchClientLocation(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/rename$/) && method==="POST") return handleRenameClient(request,env,path);
@@ -13475,6 +13476,51 @@ async function handleAmendPo(request: Request, env: Env, path: string): Promise<
   await env.DB.prepare("UPDATE client_pos SET amount=?, version=version+1 WHERE id=?").bind(newAmount, poId).run();
   await audit(env, user, "PO_AMEND", "client_po", poId, String(po.amount), `${newAmount}: ${reason}`);
   return json({ ok: true, amount: newAmount });
+}
+
+// GET /api/budget-po/reports — cross-location reports, scoped to what the caller may
+// see (internal admins: all active locations; client roles: their own client's).
+async function handleBudgetPoReports(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  await ensureBudgetPoSchema(env);
+  const empty = { locations: [], po_utilisation: [], expiring: [], orders_no_po: [], override_log: [], budget_vs: [] };
+  let locRows: Record<string, unknown>[];
+  if (isClientRole(user!.role)) {
+    const mine = await resolveClientScope(env, user!); if (!mine) return json(empty);
+    locRows = (await env.DB.prepare("SELECT cl.id, cl.client_id, cl.display_name, c.name AS client_name FROM client_locations cl JOIN clients c ON c.id=cl.client_id WHERE cl.active=1 AND cl.client_id=?").bind(mine).all()).results as Record<string, unknown>[];
+  } else {
+    locRows = (await env.DB.prepare("SELECT cl.id, cl.client_id, cl.display_name, c.name AS client_name FROM client_locations cl JOIN clients c ON c.id=cl.client_id WHERE cl.active=1 AND c.active=1").all()).results as Record<string, unknown>[];
+  }
+  const locIds = locRows.map(r => String(r.id)); if (!locIds.length) return json(empty);
+  const nameOf = (id: string) => { const r = locRows.find(x => String(x.id) === id); return r ? String(r.display_name) : id; };
+  const ph = locIds.map(() => "?").join(",");
+  const today = new Date().toISOString().slice(0, 10);
+
+  const poRows = (await env.DB.prepare(`SELECT * FROM client_pos WHERE client_location_id IN (${ph})`).bind(...locIds).all()).results as Record<string, unknown>[];
+  const po_utilisation: Record<string, unknown>[] = [], expiring: Record<string, unknown>[] = [];
+  for (const p of poRows) {
+    const sp = await poComputed(env, String(p.id));
+    const bal = Number(p.amount || 0) - sp.committed - sp.actual;
+    const used = Number(p.amount || 0) ? Math.round((sp.committed + sp.actual) / Number(p.amount) * 100) : 0;
+    const status = poEffectiveStatus(p, bal, today);
+    po_utilisation.push({ po_number: p.po_number, location: nameOf(String(p.client_location_id)), amount: p.amount, used: sp.committed + sp.actual, used_pct: used, balance: bal, status });
+    if (status === "Active" && p.valid_to && String(p.valid_to) >= today) {
+      const days = Math.round((new Date(String(p.valid_to) + "T00:00:00Z").getTime() - new Date(today + "T00:00:00Z").getTime()) / 86400000);
+      if (days <= 30) expiring.push({ po_number: p.po_number, location: nameOf(String(p.client_location_id)), valid_to: p.valid_to, days_left: days, balance: bal });
+    }
+  }
+  const noPo = (await env.DB.prepare(`SELECT id, location_id, grand_total, created_at FROM orders WHERE location_id IN (${ph}) AND (po_id IS NULL OR po_id='') AND status NOT IN ('DRAFT','CANCELLED') ORDER BY created_at DESC LIMIT 50`).bind(...locIds).all()).results as Record<string, unknown>[];
+  const orders_no_po = noPo.map(o => ({ id: o.id, location: nameOf(String(o.location_id)), value: o.grand_total, when: o.created_at }));
+  const ovRows = (await env.DB.prepare(`SELECT id, location_id, grand_total, po_override_reason, created_at FROM orders WHERE location_id IN (${ph}) AND po_override_reason IS NOT NULL AND po_override_reason<>'' ORDER BY created_at DESC LIMIT 50`).bind(...locIds).all()).results as Record<string, unknown>[];
+  const override_log = ovRows.map(o => ({ id: o.id, location: nameOf(String(o.location_id)), value: o.grand_total, reason: o.po_override_reason, when: o.created_at }));
+  const budget_vs: Record<string, unknown>[] = [];
+  for (const l of locRows) {
+    const b = await ensureActiveBudget(env, l);
+    const w = periodWindow(String(b.period_type) as PeriodType);
+    const sp = await deriveLocationSpend(env, String(l.id), w.start, w.end);
+    budget_vs.push({ location: l.display_name, period: w.label, budget: b.amount, committed: sp.committed, actual: sp.actual, variance: Number(b.amount || 0) - sp.committed - sp.actual });
+  }
+  return json({ locations: locRows, po_utilisation, expiring, orders_no_po, override_log, budget_vs });
 }
 
 // ════════════════════════════════════════════════════════════════════

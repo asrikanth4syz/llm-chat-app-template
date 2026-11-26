@@ -1378,6 +1378,7 @@ function bpoRender() {
     ${b.can_edit ? `<button class="btn btn-primary" ${dataAct('bpoEdit')}>✎ Edit budget</button>` : '<span class="u-muted" style="font-size:.8rem;align-self:center">🔒 Read-only</span>'}
     ${b.can_new_po ? `<button class="btn btn-secondary" ${dataAct('bpoNewPo')}>＋ New PO</button>` : ''}
     ${b.can_approval ? `<button class="btn btn-secondary" ${dataAct('bpoApproval')}>⚙ Approval</button>` : ''}
+    <button class="btn btn-secondary" ${dataAct('bpoReports')}>📊 Reports</button>
   </div>`;
   const tabs = `<div style="display:flex;gap:4px;border-bottom:1px solid var(--border);margin:16px 0">${['budget','pos','history'].map(t => `<button ${dataAct('bpoSetTab', t)} style="font-weight:600;font-size:.85rem;background:none;border:0;border-bottom:2px solid ${s.tab === t ? 'var(--primary)' : 'transparent'};color:${s.tab === t ? 'var(--primary)' : 'var(--text-muted)'};padding:9px 13px;cursor:pointer;margin-bottom:-1px">${({ budget:'Budget', pos:'POs', history:'History' }[t])}</button>`).join('')}</div>`;
   main.innerHTML =
@@ -1565,6 +1566,30 @@ async function bpoSaveApproval() {
   const r = await api('/clients/' + APP._bpo.clientId + '/budget-settings', { method: 'PUT', body: JSON.stringify(body) }).catch(() => null);
   if (!r || r.error) { showToast((r && r.error) || 'Could not save', 'error'); return; }
   closeModal(); showToast(r.approval_required ? 'Approval turned on.' : (body.approval_required ? 'Saved — add an approver to activate.' : 'Approval turned off.')); bpoLoad();
+}
+
+// Budget & PO reports (scoped server-side to the locations the caller can see).
+async function bpoReports() {
+  const main = document.getElementById('main-content'); if (!main) return;
+  main.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading reports…</p></div>`;
+  const r = await api('/budget-po/reports').catch(() => null);
+  if (!r || r.error) { main.innerHTML = `<div class="u-muted" style="padding:24px">Could not load reports.</div>`; return; }
+  const money = (n) => fmt(n || 0);
+  const tbl = (cols, rows) => `<div style="overflow-x:auto;border:1px solid var(--border);border-radius:12px"><table style="width:100%;min-width:560px;border-collapse:collapse;font-size:.82rem"><thead><tr>${cols.map(c => `<th style="text-align:left;padding:9px 11px;background:var(--bg);font-size:.66rem;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted)">${c}</th>`).join('')}</tr></thead><tbody>${rows || `<tr><td colspan="${cols.length}" class="u-muted" style="text-align:center;padding:18px">Nothing to show.</td></tr>`}</tbody></table></div>`;
+  const sec = (title, sub, inner) => `<div style="margin-bottom:18px"><div style="font-weight:700;color:var(--navy);margin-bottom:3px">${title}</div><div class="u-muted" style="font-size:.78rem;margin-bottom:8px">${sub}</div>${inner}</div>`;
+  const util = tbl(['PO no.', 'Location', 'Total', 'Used', 'Utilisation', 'Status'], (r.po_utilisation || []).map(p => `<tr><td><b>${h(p.po_number)}</b></td><td style="font-size:.8rem">${h(p.location)}</td><td style="text-align:right">${money(p.amount)}</td><td style="text-align:right">${money(p.used)}</td><td style="text-align:right">${p.used_pct}%</td><td>${h(p.status)}</td></tr>`).join(''));
+  const exp = tbl(['PO no.', 'Location', 'Valid to', 'Days left', 'Balance'], (r.expiring || []).map(p => `<tr><td><b>${h(p.po_number)}</b></td><td style="font-size:.8rem">${h(p.location)}</td><td style="font-size:.8rem">${h(p.valid_to)}</td><td><span class="badge" style="background:var(--warning-bg,#fdefd4);color:#9a5b00;font-size:.68rem">${p.days_left}d</span></td><td style="text-align:right">${money(p.balance)}</td></tr>`).join(''));
+  const nop = tbl(['Order', 'Location', 'Value', 'When'], (r.orders_no_po || []).map(o => `<tr><td><b>${h(o.id)}</b></td><td style="font-size:.8rem">${h(o.location)}</td><td style="text-align:right">${money(o.value)}</td><td class="u-muted" style="font-size:.78rem">${h(bpoDT(o.when))}</td></tr>`).join(''));
+  const ovl = tbl(['Order', 'Location', 'Value', 'Override reason', 'When'], (r.override_log || []).map(o => `<tr><td><b>${h(o.id)}</b></td><td style="font-size:.8rem">${h(o.location)}</td><td style="text-align:right">${money(o.value)}</td><td style="font-size:.8rem">${h(o.reason)}</td><td class="u-muted" style="font-size:.78rem">${h(bpoDT(o.when))}</td></tr>`).join(''));
+  const bvc = tbl(['Location', 'Period', 'Budget', 'Committed', 'Actual', 'Variance'], (r.budget_vs || []).map(b => `<tr><td style="font-size:.8rem">${h(b.location)}</td><td style="font-size:.8rem">${h(b.period)}</td><td style="text-align:right">${money(b.budget)}</td><td style="text-align:right">${money(b.committed)}</td><td style="text-align:right">${money(b.actual)}</td><td style="text-align:right;color:${b.variance < 0 ? 'var(--danger)' : 'var(--success)'}">${b.variance < 0 ? '−' : '+'}${money(Math.abs(b.variance))}</td></tr>`).join(''));
+  main.innerHTML =
+    `<div style="font-size:.84rem;color:var(--text-muted);margin-bottom:12px"><span style="cursor:pointer;font-weight:600;color:var(--primary)" ${dataAct('bpoBack')}>← Client Directory</span> › <span style="cursor:pointer;font-weight:600;color:var(--primary)" ${dataAct('bpoLoad')}>Budget &amp; PO</span> › Reports</div>
+     <div style="font-size:1.2rem;font-weight:800;color:var(--navy);margin-bottom:14px">Budget &amp; PO reports</div>
+     ${sec('PO utilisation', 'committed + actual against each PO', util)}
+     ${sec('POs expiring soon', 'Active POs within 30 days of expiry', exp)}
+     ${sec('Orders with no PO', 'placed without a PO reference', nop)}
+     ${sec('Override log', 'orders that proceeded past a warning (who / why)', ovl)}
+     ${sec('Budget vs committed vs actual', 'by location and current period', bvc)}`;
 }
 
 async function editClientModal(c) {

@@ -122,6 +122,15 @@ describe("purchase orders + ledger", () => {
     expect(po.balance).toBe(500000);
     expect(po.category_scope).toEqual(["Tea"]);
   });
+  it("reports endpoint returns scoped budget-vs + orders-with-no-PO", async () => {
+    const r = await (await get("/api/budget-po/reports", opsTok)).json() as any;
+    expect(r.locations.some((l: any) => l.id === "locInd")).toBe(true);
+    expect(r.budget_vs.some((b: any) => b.location === "Chaayos - Indiranagar")).toBe(true);
+    expect(r.orders_no_po.some((o: any) => o.id === "o-open")).toBe(true); // seeded order has no PO
+    // a client user sees only their own client's locations
+    const rc = await (await get("/api/budget-po/reports", cuTok)).json() as any;
+    expect(rc.locations.every((l: any) => l.client_id === "cCh")).toBe(true);
+  });
   it("an order against a PO writes a committed ledger entry (PO committed rises)", async () => {
     const c = await (await post("/api/locations/locInd/pos", { po_number: "PO-26-0161", amount: 500000, type: "Blanket" }, opsTok)).json() as any;
     const o = await (await post("/api/orders", { client_id: "cCh", location_id: "locInd", po_id: c.id, items: [{ sku: "BW", name: "Brew", qty: 2, unit_price: 100 }] }, opsTok)).json() as any;
