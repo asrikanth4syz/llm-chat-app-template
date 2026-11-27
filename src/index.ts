@@ -7332,6 +7332,8 @@ export default {
       if (path.match(/^\/api\/locations\/[^/]+\/budget$/)         && method==="GET")  return handleGetLocationBudget(request,env,path);
       if (path.match(/^\/api\/locations\/[^/]+\/budget\/revise$/) && method==="POST") return handleReviseBudget(request,env,path);
       if (path.match(/^\/api\/locations\/[^/]+\/budget\/history$/)&& method==="GET")  return handleBudgetHistory(request,env,path);
+      if (path.match(/^\/api\/budget-revisions\/[^/]+\/approve$/) && method==="POST") return handleApproveBudgetRevision(request,env,path);
+      if (path.match(/^\/api\/budget-revisions\/[^/]+\/reject$/)  && method==="POST") return handleRejectBudgetRevision(request,env,path);
       if (path.match(/^\/api\/locations\/[^/]+\/pos$/)            && method==="GET")  return handleListLocationPos(request,env,path);
       if (path.match(/^\/api\/locations\/[^/]+\/pos$/)            && method==="POST") return handleCreateLocationPo(request,env,path);
       if (path.match(/^\/api\/client-pos\/[^/]+\/amend$/)         && method==="POST") return handleAmendPo(request,env,path);
@@ -13360,6 +13362,11 @@ async function ensureBudgetPoSchema(env: Env): Promise<void> {
   for (const s of stmts) await env.DB.prepare(s).run().catch(() => {});
   await env.DB.prepare("ALTER TABLE orders ADD COLUMN po_id TEXT").run().catch(() => {});
   await env.DB.prepare("ALTER TABLE orders ADD COLUMN po_override_reason TEXT").run().catch(() => {});
+  // Approve / reject a pending budget revision.
+  await env.DB.prepare("ALTER TABLE budget_revisions ADD COLUMN decided_by TEXT").run().catch(() => {});
+  await env.DB.prepare("ALTER TABLE budget_revisions ADD COLUMN decided_by_name TEXT").run().catch(() => {});
+  await env.DB.prepare("ALTER TABLE budget_revisions ADD COLUMN decided_at TEXT").run().catch(() => {});
+  await env.DB.prepare("ALTER TABLE budget_revisions ADD COLUMN reject_reason TEXT").run().catch(() => {});
   _budgetPoReady = true;
 }
 
@@ -13500,7 +13507,64 @@ async function handleBudgetHistory(request: Request, env: Env, path: string): Pr
   const locId = path.split("/")[3];
   const loc = await budgetLocationFor(env, user!, locId); if (!loc) return json({ error: "Not found" }, 404);
   const { results } = await env.DB.prepare("SELECT * FROM budget_revisions WHERE location_id=? ORDER BY created_at DESC").bind(locId).all();
-  return json({ location_id: locId, revisions: results });
+  return json({ location_id: locId, revisions: results, can_decide: ["client_admin", "client_approver"].includes(user!.role) });
+}
+
+// Shared guard: load a pending revision and check the caller may decide it — a client
+// admin or the nominated client approver for that client, and never the requester.
+async function loadDecidableRevision(env: Env, user: JWTPayload, revId: string): Promise<{ rev: Record<string, unknown>; loc: Record<string, unknown> } | Response> {
+  const rev = await env.DB.prepare("SELECT * FROM budget_revisions WHERE id=?").bind(revId).first() as Record<string, unknown> | null;
+  if (!rev) return json({ error: "Revision not found" }, 404);
+  if (String(rev.status) !== "pending") return json({ error: "This revision is not pending." }, 400);
+  const loc = await env.DB.prepare("SELECT id, client_id, display_name FROM client_locations WHERE id=?").bind(String(rev.location_id)).first() as Record<string, unknown> | null;
+  if (!loc) return json({ error: "Location not found" }, 404);
+  if (!["client_admin", "client_approver"].includes(user.role)) return json({ error: "Only the client's approver can decide a budget revision." }, 403);
+  const mine = await resolveClientScope(env, user);
+  if (!mine || String(mine) !== String(loc.client_id)) return json({ error: "Forbidden" }, 403);
+  if (String(rev.changed_by) === String(user.sub)) return json({ error: "You can't approve or reject your own change." }, 403);
+  return { rev, loc };
+}
+
+// POST /api/budget-revisions/:id/approve — apply a pending revision to the active budget.
+async function handleApproveBudgetRevision(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  await ensureBudgetPoSchema(env);
+  const loaded = await loadDecidableRevision(env, user!, path.split("/")[3]);
+  if (loaded instanceof Response) return loaded;
+  const { rev, loc } = loaded;
+  const newAmount = Number(rev.new_amount || 0);
+  const b = await env.DB.prepare("SELECT * FROM location_budgets WHERE id=?").bind(String(rev.budget_id)).first() as Record<string, unknown> | null;
+  if (b && String(b.period_type) !== String(rev.period_type)) {
+    // A period-type change starts a new active budget.
+    await env.DB.prepare("UPDATE location_budgets SET active=0 WHERE location_id=?").bind(String(loc.id)).run();
+    const w = periodWindow(String(rev.period_type) as PeriodType);
+    await env.DB.prepare("INSERT INTO location_budgets (id,location_id,client_id,period_type,period_label,period_start,period_end,amount,created_by_type,active) VALUES (?,?,?,?,?,?,?,?,?,1)")
+      .bind(uid(), String(loc.id), String(loc.client_id), String(rev.period_type), w.label, w.start, w.end, newAmount, rev.source === "behalf" ? "internal" : "client").run();
+  } else if (b) {
+    await env.DB.prepare("UPDATE location_budgets SET amount=?, active=1 WHERE id=?").bind(newAmount, b.id).run();
+  }
+  await env.DB.prepare("UPDATE budget_revisions SET status='applied', decided_by=?, decided_by_name=?, decided_at=datetime('now') WHERE id=?")
+    .bind(user!.sub, user!.name, String(rev.id)).run();
+  await audit(env, user, "BUDGET_REVISION_APPROVE", "location", String(loc.id), undefined, `rev ${rev.id} → ₹${Math.round(newAmount)}`);
+  if (rev.changed_by) await pushNotification(env, null, `Your budget change for ${loc.display_name} was approved → ₹${Math.round(newAmount)}`, String(rev.changed_by)).catch(() => {});
+  return json({ ok: true, status: "applied", amount: newAmount });
+}
+
+// POST /api/budget-revisions/:id/reject — reject a pending revision (comment required).
+async function handleRejectBudgetRevision(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const denied = requireUser(user); if (denied) return denied;
+  await ensureBudgetPoSchema(env);
+  const body = await request.json().catch(() => ({})) as { comment?: string };
+  const comment = String(body.comment || "").trim();
+  if (!comment) return json({ error: "A reason for the rejection is required." }, 400);
+  const loaded = await loadDecidableRevision(env, user!, path.split("/")[3]);
+  if (loaded instanceof Response) return loaded;
+  const { rev, loc } = loaded;
+  await env.DB.prepare("UPDATE budget_revisions SET status='rejected', reject_reason=?, decided_by=?, decided_by_name=?, decided_at=datetime('now') WHERE id=?")
+    .bind(comment, user!.sub, user!.name, String(rev.id)).run();
+  await audit(env, user, "BUDGET_REVISION_REJECT", "location", String(loc.id), undefined, `rev ${rev.id}: ${comment.slice(0, 80)}`);
+  if (rev.changed_by) await pushNotification(env, null, `Your budget change for ${loc.display_name} was rejected — ${comment.slice(0, 120)}`, String(rev.changed_by)).catch(() => {});
+  return json({ ok: true, status: "rejected" });
 }
 
 // GET/PUT /api/clients/:clientId/budget-settings

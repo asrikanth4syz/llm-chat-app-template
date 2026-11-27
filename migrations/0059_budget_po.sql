@@ -37,8 +37,12 @@ CREATE TABLE IF NOT EXISTS budget_revisions (
   changed_by_name TEXT,
   changed_role TEXT,
   source TEXT,                  -- direct | behalf
-  status TEXT NOT NULL DEFAULT 'applied',   -- applied | pending
+  status TEXT NOT NULL DEFAULT 'applied',   -- applied | pending | rejected
   approver TEXT,
+  decided_by TEXT,              -- user id of the approver who applied or rejected
+  decided_by_name TEXT,
+  decided_at TEXT,
+  reject_reason TEXT,           -- required note when a pending revision is rejected
   created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_budgetrev_loc ON budget_revisions (location_id, created_at);

@@ -1351,7 +1351,7 @@ async function bpoLoad() {
     api('/locations/' + s.locId + '/budget/history').catch(() => null),
   ]);
   if (!b || b.error) { main.innerHTML = `<div class="u-muted" style="padding:24px">${h((b && b.error) || 'Could not load the budget.')}</div>`; return; }
-  s.data = { b, pos: (posR && posR.pos) || [], hist: (hist && hist.revisions) || [] };
+  s.data = { b, pos: (posR && posR.pos) || [], hist: (hist && hist.revisions) || [], canDecide: !!(hist && hist.can_decide) };
   bpoRender();
 }
 
@@ -1447,7 +1447,11 @@ function bpoHistPanel() {
     const chg = !r.old_amount ? '<span class="badge" style="background:var(--info-bg,#e7f1fb);color:#2563eb;font-size:.66rem">New</span>'
       : d === 0 ? '<span class="u-muted">—</span>' : `<span style="color:${d > 0 ? 'var(--success)' : 'var(--danger)'};font-weight:600">${d > 0 ? '▲ +' : '▼ '}${fmt(Math.abs(d))} (${d > 0 ? '+' : ''}${pct}%)</span>`;
     const src = r.source === 'behalf' ? '<span class="badge" style="background:#efe6fb;color:#7a4bd0;font-size:.66rem">On behalf</span>' : '<span class="badge" style="background:var(--info-bg,#e9ebff);color:var(--primary);font-size:.66rem">Direct</span>';
-    const st = r.status === 'pending' ? '<span class="badge" style="background:var(--warning-bg,#fdefd4);color:#9a5b00;font-size:.66rem">⏳ Pending</span>' : '<span class="badge" style="background:var(--success-soft-bg,#e3f5ec);color:var(--success);font-size:.66rem">✓ Applied</span>';
+    const st = r.status === 'pending' ? '<span class="badge" style="background:var(--warning-bg,#fdefd4);color:#9a5b00;font-size:.66rem">⏳ Pending</span>'
+      : r.status === 'rejected' ? `<span class="badge" style="background:var(--danger-soft-bg,#fbe4e7);color:var(--danger);font-size:.66rem">✕ Rejected</span>${r.reject_reason ? `<div class="u-muted" style="font-size:.68rem">${h(r.reject_reason)}</div>` : ''}`
+      : `<span class="badge" style="background:var(--success-soft-bg,#e3f5ec);color:var(--success);font-size:.66rem">✓ Applied</span>${r.decided_by_name ? `<div class="u-muted" style="font-size:.68rem">by ${h(r.decided_by_name)}</div>` : ''}`;
+    const canAct = APP._bpo.data.canDecide && r.status === 'pending' && r.changed_by !== APP.user?.sub;
+    const acts = canAct ? `<div style="margin-top:5px;display:flex;gap:6px"><button class="btn btn-sm" style="padding:2px 9px;background:var(--success,#17724b);color:#fff;border:none" ${dataAct('bpoApproveRev', r.id)}>Approve</button><button class="btn btn-sm" style="padding:2px 9px" ${dataAct('bpoRejectRev', r.id)}>Reject</button></div>` : '';
     return `<tr>
       <td class="u-muted" style="font-size:.76rem;white-space:nowrap">${h(bpoDT(r.created_at))}<div style="font-size:.7rem">eff. ${h(r.effective_from || '')}</div></td>
       <td style="font-size:.8rem">${h(r.changed_by_name || '')}<div class="u-muted" style="font-size:.7rem">${h(r.changed_role || '')}</div></td>
@@ -1456,7 +1460,7 @@ function bpoHistPanel() {
       <td>${chg}</td>
       <td style="font-size:.8rem">${r.po_ref ? '<b>' + h(r.po_ref) + '</b>' : '<span class="u-muted">—</span>'}</td>
       <td style="font-size:.8rem">${h(r.reason || '')}${r.note ? `<div class="u-muted" style="font-size:.7rem">${h(r.note)}</div>` : ''}${r.attachment_name ? `<div class="u-muted" style="font-size:.7rem">📎 ${h(r.attachment_name)}</div>` : ''}</td>
-      <td>${st}</td></tr>`;
+      <td>${st}${acts}</td></tr>`;
   }).join('') : `<tr><td colspan="9" class="u-muted" style="text-align:center;padding:22px">No revisions yet.</td></tr>`;
   return `<div class="u-muted" style="font-size:.8rem;margin-bottom:10px">Append-only — revisions can't be edited or deleted.</div>
     <div style="overflow-x:auto;border:1px solid var(--border);border-radius:12px"><table style="width:100%;min-width:860px;border-collapse:collapse;font-size:.82rem">
@@ -1464,6 +1468,24 @@ function bpoHistPanel() {
     <tbody>${rows}</tbody></table></div>`;
 }
 function bpoDT(s) { if (!s) return ''; const d = new Date(String(s).replace(' ', 'T') + (String(s).endsWith('Z') ? '' : 'Z')); return isNaN(d) ? String(s) : d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) + ', ' + d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }); }
+
+async function bpoApproveRev(id) {
+  const r = await api('/budget-revisions/' + id + '/approve', { method: 'POST', body: '{}' });
+  if (!r) return; // api() already surfaced the error
+  showToast('Revision approved — budget updated.'); bpoLoad();
+}
+function bpoRejectRev(id) {
+  openModal('Reject budget change',
+    `<div class="form-group"><label>Reason for rejection <span style="color:var(--danger)">*</span></label><textarea id="rej-c" rows="3" placeholder="The requester will see this"></textarea></div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button><button class="btn btn-danger" ${dataAct('bpoRejectSubmit', id)}>Reject change</button>`);
+}
+async function bpoRejectSubmit(id) {
+  const comment = (document.getElementById('rej-c')?.value || '').trim();
+  if (!comment) { showToast('A reason is required', 'error'); return; }
+  const r = await api('/budget-revisions/' + id + '/reject', { method: 'POST', body: JSON.stringify({ comment }) });
+  if (!r) return; // api() already surfaced the error
+  closeModal(); showToast('Revision rejected — requester notified.'); bpoLoad();
+}
 
 function bpoBack() { navigate('clients'); }
 function bpoSetTab(t) { APP._bpo.tab = t; bpoRender(); }

@@ -13,7 +13,7 @@ const put = (p: string, b: unknown, t?: string) => SELF.fetch(`${BASE}${p}`, { m
 const get = (p: string, t?: string) => SELF.fetch(`${BASE}${p}`, { headers: hdr(t) });
 async function login(e: string, pw: string): Promise<string> { return (await (await post("/api/auth/login", { email: e, password: pw })).json() as { token: string }).token; }
 const db = () => env.DB as D1Database;
-let opsTok: string, caTok: string, cuTok: string;
+let opsTok: string, caTok: string, cuTok: string, apprTok: string;
 
 beforeAll(async () => {
   const d = db();
@@ -29,7 +29,7 @@ beforeAll(async () => {
   // Budget/PO tables (created at runtime in prod by ensureBudgetPoSchema, whose ready
   // flag persists across the isolate while test storage resets — so seed them here).
   await d.prepare("CREATE TABLE IF NOT EXISTS location_budgets ( id TEXT PRIMARY KEY, location_id TEXT NOT NULL, client_id TEXT NOT NULL, period_type TEXT NOT NULL DEFAULT 'Monthly', period_label TEXT, period_start TEXT, period_end TEXT, amount REAL NOT NULL DEFAULT 0, created_by_type TEXT NOT NULL DEFAULT 'client', active INTEGER NOT NULL DEFAULT 1, created_at TEXT DEFAULT (datetime('now')) )").run();
-  await d.prepare("CREATE TABLE IF NOT EXISTS budget_revisions ( id TEXT PRIMARY KEY, budget_id TEXT, location_id TEXT NOT NULL, old_amount REAL, new_amount REAL, period_type TEXT, period_label TEXT, effective_kind TEXT, effective_from TEXT, po_ref TEXT, reason TEXT, note TEXT, attachment_name TEXT, changed_by TEXT, changed_by_name TEXT, changed_role TEXT, source TEXT, status TEXT NOT NULL DEFAULT 'applied', approver TEXT, created_at TEXT DEFAULT (datetime('now')) )").run();
+  await d.prepare("CREATE TABLE IF NOT EXISTS budget_revisions ( id TEXT PRIMARY KEY, budget_id TEXT, location_id TEXT NOT NULL, old_amount REAL, new_amount REAL, period_type TEXT, period_label TEXT, effective_kind TEXT, effective_from TEXT, po_ref TEXT, reason TEXT, note TEXT, attachment_name TEXT, changed_by TEXT, changed_by_name TEXT, changed_role TEXT, source TEXT, status TEXT NOT NULL DEFAULT 'applied', approver TEXT, decided_by TEXT, decided_by_name TEXT, decided_at TEXT, reject_reason TEXT, created_at TEXT DEFAULT (datetime('now')) )").run();
   await d.prepare("CREATE TABLE IF NOT EXISTS budget_settings ( client_id TEXT PRIMARY KEY, approval_required INTEGER NOT NULL DEFAULT 0, threshold_pct INTEGER NOT NULL DEFAULT 20, approver_user_id TEXT, po_mandatory INTEGER NOT NULL DEFAULT 0, updated_at TEXT DEFAULT (datetime('now')) )").run();
   await d.prepare("CREATE TABLE IF NOT EXISTS client_pos ( id TEXT PRIMARY KEY, po_number TEXT NOT NULL, client_location_id TEXT NOT NULL, budget_id TEXT, type TEXT NOT NULL DEFAULT 'Blanket', valid_from TEXT, valid_to TEXT, amount REAL NOT NULL DEFAULT 0, category_scope TEXT, document_name TEXT, status TEXT NOT NULL DEFAULT 'Active', version INTEGER NOT NULL DEFAULT 1, created_at TEXT DEFAULT (datetime('now')) )").run();
   await d.prepare("CREATE TABLE IF NOT EXISTS client_po_ledger ( id TEXT PRIMARY KEY, po_id TEXT NOT NULL, order_id TEXT, type TEXT NOT NULL, amount REAL NOT NULL, created_at TEXT DEFAULT (datetime('now')) )").run();
@@ -46,8 +46,14 @@ beforeAll(async () => {
   await d.prepare("INSERT OR IGNORE INTO users (id,email,password_hash,role,name,org,initials,active,client_id) VALUES ('u-ca','ca@sp.test','SEED:pw123','client_admin','Ravi','Chaayos','R',1,'cCh')").run();
   await d.prepare("INSERT OR IGNORE INTO users (id,email,password_hash,role,name,org,initials,active,client_id) VALUES ('u-cu','cu@sp.test','SEED:pw123','client_user','Sana','Chaayos','S',1,'cCh')").run();
   await d.prepare("INSERT OR IGNORE INTO users (id,email,password_hash,role,name,org,initials,active,client_id) VALUES ('u-appr','appr@sp.test','SEED:pw123','client_approver','Anita','Chaayos','A',1,'cCh')").run();
-  opsTok = await login("ops@sp.test", "pw123"); caTok = await login("ca@sp.test", "pw123"); cuTok = await login("cu@sp.test", "pw123");
+  opsTok = await login("ops@sp.test", "pw123"); caTok = await login("ca@sp.test", "pw123"); cuTok = await login("cu@sp.test", "pw123"); apprTok = await login("appr@sp.test", "pw123");
 });
+
+// Create a pending revision (effective "next period" is always pending) and return its id.
+async function seedPendingRevision(amount: number): Promise<string> {
+  await post("/api/locations/locInd/budget/revise", { new_amount: amount, reason: "needs sign-off", effective_kind: "next" }, caTok);
+  return (await db().prepare("SELECT id FROM budget_revisions WHERE location_id='locInd' AND status='pending' ORDER BY created_at DESC LIMIT 1").first() as any).id;
+}
 
 describe("budget read + floor", () => {
   it("auto-seeds the active budget from the client's monthly_budget and derives committed/actual/floor", async () => {
@@ -140,5 +146,41 @@ describe("purchase orders + ledger", () => {
     const po = list.pos.find((p: any) => p.id === c.id);
     expect(po.committed).toBe(200);
     expect(po.balance).toBe(499800);
+  });
+});
+
+describe("budget revision approve / reject", () => {
+  it("the approver applies a pending revision — the active amount updates and status becomes applied", async () => {
+    const id = await seedPendingRevision(250000);
+    expect((await (await get("/api/locations/locInd/budget", caTok)).json() as any).budget.amount).toBe(180000); // unchanged while pending
+    const r = await post(`/api/budget-revisions/${id}/approve`, {}, apprTok);
+    expect(r.status).toBe(200);
+    expect((await r.json() as any).status).toBe("applied");
+    expect((await (await get("/api/locations/locInd/budget", caTok)).json() as any).budget.amount).toBe(250000);
+    expect((await db().prepare("SELECT status,decided_by FROM budget_revisions WHERE id=?").bind(id).first() as any).decided_by).toBe("u-appr");
+  });
+  it("the requester cannot approve their own change", async () => {
+    const id = await seedPendingRevision(250000);
+    expect((await post(`/api/budget-revisions/${id}/approve`, {}, caTok)).status).toBe(403);
+    expect((await db().prepare("SELECT status FROM budget_revisions WHERE id=?").bind(id).first() as any).status).toBe("pending");
+  });
+  it("a read-only client user cannot decide", async () => {
+    const id = await seedPendingRevision(250000);
+    expect((await post(`/api/budget-revisions/${id}/approve`, {}, cuTok)).status).toBe(403);
+  });
+  it("reject requires a comment and marks the revision rejected with the reason", async () => {
+    const id = await seedPendingRevision(250000);
+    expect((await post(`/api/budget-revisions/${id}/reject`, {}, apprTok)).status).toBe(400);
+    const r = await post(`/api/budget-revisions/${id}/reject`, { comment: "Over the quarter cap" }, apprTok);
+    expect(r.status).toBe(200);
+    const rev = await db().prepare("SELECT status,reject_reason FROM budget_revisions WHERE id=?").bind(id).first() as any;
+    expect(rev.status).toBe("rejected");
+    expect(rev.reject_reason).toBe("Over the quarter cap");
+    expect((await (await get("/api/locations/locInd/budget", caTok)).json() as any).budget.amount).toBe(180000); // unchanged
+  });
+  it("a revision that is already decided cannot be approved again", async () => {
+    const id = await seedPendingRevision(250000);
+    expect((await post(`/api/budget-revisions/${id}/approve`, {}, apprTok)).status).toBe(200);
+    expect((await post(`/api/budget-revisions/${id}/approve`, {}, apprTok)).status).toBe(400); // not pending
   });
 });
