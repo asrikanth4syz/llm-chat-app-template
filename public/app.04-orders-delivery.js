@@ -1186,6 +1186,29 @@ function injectOrderFullCss() {
   .odrawer .in{padding:18px;overflow:auto;flex:1}
   .odkv{display:grid;grid-template-columns:110px 1fr;gap:6px 10px;margin:14px 0;font-size:.84rem}
   .odkv span:nth-child(odd){color:var(--text-muted)}
+  /* Shared, aligned card header across the order Overview panel. */
+  .ofh{font-size:.95rem;margin:0 0 12px;color:var(--navy);font-weight:800;display:flex;align-items:center;gap:8px;flex-wrap:wrap;line-height:1.2}
+  .ofh .u-muted{font-weight:600;font-size:.78rem}
+  .ofh .badge{font-size:.66rem}
+  /* Delivery reconciliation — one block: % + units on one line, full-width bar,
+     then three equal, clearly-clickable boxes that line up. */
+  .ofrecon{display:flex;flex-direction:column;gap:12px}
+  .ofrtop{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+  .ofrpct{font-size:2rem;font-weight:800;color:#0C8E6D;font-variant-numeric:tabular-nums;line-height:1}
+  .ofrlead{font-size:.84rem;color:var(--text-muted)}
+  .ofrlead b{color:var(--text);font-variant-numeric:tabular-nums}
+  .ofrbar{height:10px;background:var(--bg,var(--surface-2));border:1px solid var(--border);border-radius:6px;overflow:hidden}
+  .ofrbar i{display:block;height:100%;background:#0C8E6D}
+  .ofrboxes{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  .ofrbox{display:flex;flex-direction:column;gap:3px;border:1px solid var(--border);background:var(--surface);border-radius:12px;padding:11px 12px;text-align:left;cursor:pointer;min-height:92px;transition:border-color .12s,box-shadow .12s;color:inherit;font:inherit}
+  .ofrbox:hover,.ofrbox:focus-visible{border-color:var(--navy);box-shadow:0 2px 8px rgba(0,0,0,.07);outline:none}
+  .ofrbox .l{font-size:.68rem;font-weight:800;letter-spacing:.04em}
+  .ofrbox .v{font-size:1.3rem;font-weight:800;font-variant-numeric:tabular-nums;line-height:1.1}
+  .ofrbox .v .vu{font-size:.6rem;font-weight:700;color:var(--text-muted)}
+  .ofrbox .s{font-size:.66rem;color:var(--text-muted)}
+  .ofrbox .view{margin-top:auto;padding-top:6px;font-size:.66rem;font-weight:700;color:var(--navy);display:flex;align-items:center;gap:2px}
+  @media (prefers-color-scheme:dark){ .ofrbox .view{color:#8fc7ea} }
+  @media (max-width:430px){ .ofrboxes{grid-template-columns:1fr} }
   @media (max-width:800px){ .ofgrid{grid-template-columns:1fr} }
   `;
   const s = document.createElement('style'); s.textContent = css; document.head.appendChild(s);
@@ -1381,18 +1404,23 @@ function ofTotals(order) {
 function ofReconBoxesHtml(r) {
   const n = v => Number(v || 0).toLocaleString('en-IN');
   const over = Math.max(0, Number(r.delQty || 0) - Number(r.ordQty || 0));
-  const box = (label, val, color, view) => `<button type="button" ${dataAct('ofGoTab', 'delivery', view)} aria-label="${label} — open the Delivery tab"
-    style="border:1px solid var(--border);background:var(--bg,var(--surface-2));border-radius:12px;padding:12px 14px;text-align:left;cursor:pointer;width:100%">
-    <span style="font-size:.72rem;font-weight:700;color:${color}">${label}</span><div style="font-size:1.25rem;font-weight:800;color:${color};font-variant-numeric:tabular-nums">${val}</div></button>`;
-  return `<div style="display:flex;gap:14px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
-    <span style="font-size:2rem;font-weight:800;color:#0C8E6D">${Math.min(100, r.pctDelQty)}%</span>
-    <div style="flex:1;min-width:140px"><div style="height:10px;background:var(--bg,var(--surface-2));border:1px solid var(--border);border-radius:5px;overflow:hidden"><i style="display:block;height:100%;width:${Math.min(100, r.pctDelQty)}%;background:#0C8E6D"></i></div>
-    <div class="u-muted" style="margin-top:4px"><b>${n(r.delQty)} of ${n(r.ordQty)}</b> units${over > 0 ? ` · <span style="color:var(--danger);font-weight:700">${n(over)} over-delivered</span>` : ''}</div></div></div>
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
-      ${box('ORDERED', r.ordItems + ' / ' + n(r.ordQty), 'var(--navy)', 'item')}
-      ${box('DELIVERED', r.delItems + ' / ' + n(r.delQty), '#0C8E6D', 'item')}
-      ${box('DUE', r.dueItems + ' / ' + n(r.dueQty), '#B5731A', 'due')}
-    </div>`;
+  const pct = Math.min(100, Number(r.pctDelQty) || 0);
+  const items = v => `${Number(v || 0)} item${Number(v || 0) === 1 ? '' : 's'}`;
+  const box = (label, itemCount, qty, color, view) => `<button type="button" ${dataAct('ofGoTab', 'delivery', view)} class="ofrbox" aria-label="${label}: ${n(qty)} units across ${items(itemCount)} — open the Delivery tab">
+    <span class="l" style="color:${color}">${label}</span>
+    <span class="v" style="color:${color}">${n(qty)} <span class="vu">units</span></span>
+    <span class="s">${items(itemCount)}</span>
+    <span class="view">View ›</span></button>`;
+  return `<div class="ofrecon">
+    <div class="ofrtop"><span class="ofrpct">${pct}%</span>
+      <span class="ofrlead"><b>${n(r.delQty)}</b> of <b>${n(r.ordQty)}</b> units delivered${over > 0 ? ` · <span style="color:var(--danger);font-weight:700">${n(over)} over-delivered</span>` : ''}</span></div>
+    <div class="ofrbar"><i style="width:${pct}%"></i></div>
+    <div class="ofrboxes">
+      ${box('ORDERED', r.ordItems, r.ordQty, 'var(--navy)', 'item')}
+      ${box('DELIVERED', r.delItems, r.delQty, '#0C8E6D', 'item')}
+      ${box('DUE', r.dueItems, r.dueQty, '#B5731A', 'due')}
+    </div>
+  </div>`;
 }
 function ofTabOverview() {
   const c = APP._ofCtx, order = c.order, t = ofTotals(order);
@@ -1402,7 +1430,7 @@ function ofTabOverview() {
   if (isFinance && order.budget && Number(order.budget.monthly_budget) > 0) {
     const used = Number(order.budget.used_excluding_this || 0) + t.grand;
     const pct = Math.min(100, Math.round(used / Number(order.budget.monthly_budget) * 100));
-    budgetCard = `<div class="card"><h2 style="font-size:.95rem;margin:0 0 6px;color:var(--navy)">Budget impact <span class="badge" style="font-size:.66rem">Finance</span></h2>
+    budgetCard = `<div class="card"><h2 class="ofh">Budget impact <span class="badge">Finance</span></h2>
       <div class="u-muted" style="font-size:.82rem">Month-to-date including this order</div>
       <div style="font-size:1.15rem;font-weight:800;margin:4px 0">${fmt(used)} <span class="u-muted" style="font-weight:600">of ${fmt(order.budget.monthly_budget)}</span></div>
       <div style="height:10px;background:var(--bg,var(--surface-2));border:1px solid var(--border);border-radius:5px;overflow:hidden"><i style="display:block;height:100%;width:${pct}%;background:${pct > 90 ? 'var(--danger)' : 'var(--blue,#3b82f6)'}"></i></div>
@@ -1414,7 +1442,7 @@ function ofTabOverview() {
   const pdd = order.predicted_delivery_date;
   const pddTerminal = ['CLOSED', 'DELIVERED', 'CANCELLED'].includes(order.status);
   const pddLate = pdd && pdd < today && !pddTerminal;
-  const estCard = pddTerminal ? '' : `<div class="card"><h2 style="font-size:.95rem;margin:0 0 8px;color:var(--navy)">📅 Estimated delivery</h2>
+  const estCard = pddTerminal ? '' : `<div class="card"><h2 class="ofh">📅 Estimated delivery</h2>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <input type="date" id="of-pdd-input" value="${pdd || ''}" min="${today}" aria-label="Estimated delivery date"
         style="padding:7px 10px;border:1px solid var(--border);border-radius:7px;font-size:.85rem;background:var(--surface);color:var(--text)">
@@ -1432,17 +1460,17 @@ function ofTabOverview() {
   <div class="ofgrid">
     <div class="ofstack">
       <div class="card">${ofStepperHtml(order)}</div>
-      <div class="card"><h2 style="font-size:.95rem;margin:0 0 10px;color:var(--navy)">Delivery reconciliation <span class="u-muted" style="font-weight:600">· click a box for the detail</span></h2>${ofReconBoxesHtml(c.recon)}</div>
-      ${amend ? `<div class="card"><h2 style="font-size:.95rem;margin:0 0 10px;color:var(--navy)">Amendments</h2>${amend}</div>` : ''}
+      <div class="card"><h2 class="ofh">Delivery reconciliation <span class="u-muted">· click a box for the detail</span></h2>${ofReconBoxesHtml(c.recon)}</div>
+      ${amend ? `<div class="card"><h2 class="ofh">Amendments</h2>${amend}</div>` : ''}
     </div>
     <div class="ofstack">
-      <div class="card oftot"><h2 style="font-size:.95rem;margin:0 0 10px;color:var(--navy)">Totals</h2>
+      <div class="card oftot"><h2 class="ofh">Totals</h2>
         <div><span>Subtotal (before tax)</span><span>${fmt(t.sub)}</span></div>
         <div><span>GST</span><span>${fmt(t.gst)}</span></div>
         <div class="g"><span>Grand total</span><span>${fmt(t.grand)}</span></div></div>
       ${estCard}
       ${budgetCard}
-      <div class="card"><h2 style="font-size:.95rem;margin:0 0 8px;color:var(--navy)">Comments</h2>${commentsBody}
+      <div class="card"><h2 class="ofh">Comments</h2>${commentsBody}
         <div style="display:flex;gap:8px;margin-top:10px"><input type="text" id="comment-input" placeholder="Add a comment…" style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:.85rem"><button class="btn btn-primary btn-sm" ${dataAct('addOrderComment', c.id)}>Post</button></div></div>
     </div>
   </div>`;
