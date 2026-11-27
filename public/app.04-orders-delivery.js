@@ -921,7 +921,7 @@ async function viewOrder(id) {
         <td>${h(i.name)}${noteHtml}${delayCell(i)}</td>
         <td class="u-muted">${i.qty}</td>
         <td><b style="color:${over>0?'var(--danger)':short?'var(--warning)':'var(--success)'}">${d.delivered}</b>${short?` <span style="font-size:.75rem;color:var(--warning)">(due ${d.due})</span>`:''}${over>0?` <span style="font-size:.75rem;color:var(--danger)">(+${over} over)</span>`:''}</td>
-        <td>${fmt(i.unit_price)}</td>
+        <td>${fmt(i.unit_price)}${priceSrcBadge(i)}</td>
         <td>${fmt(i.total)}</td>
       </tr>`;
     }
@@ -932,11 +932,11 @@ async function viewOrder(id) {
         <td>${h(i.name)}${noteHtml}${delayCell(i)}</td>
         <td class="u-muted">${i.qty}</td>
         <td><b style="color:${isShort?'var(--warning)':'inherit'}">${picked !== undefined ? picked : i.qty}</b>${isShort?` <span style="font-size:.75rem;color:var(--warning)">(short ${i.qty-picked})</span>`:''}</td>
-        <td>${fmt(i.unit_price)}</td>
+        <td>${fmt(i.unit_price)}${priceSrcBadge(i)}</td>
         <td>${fmt(i.total)}</td>
       </tr>`;
     }
-    return `<tr><td>${h(i.name)}${noteHtml}${delayCell(i)}</td><td>${i.qty}</td><td>${fmt(i.unit_price)}</td><td>${fmt(i.total)}</td></tr>`;
+    return `<tr><td>${h(i.name)}${noteHtml}${delayCell(i)}</td><td>${i.qty}</td><td>${fmt(i.unit_price)}${priceSrcBadge(i)}</td><td>${fmt(i.total)}</td></tr>`;
   }).join('');
 
   const commentsHtml = `
@@ -2794,6 +2794,52 @@ async function submitReprice(id) {
    order. Any change re-opens approval (server resets to
    PENDING_APPROVAL and clears picking).
    ============================================================ */
+// A small chip showing how a line was priced, so an agreed price is never mistaken
+// for a fallback. Driven by order_items.price_source ('client' | 'standard' | 'override').
+function priceSrcBadge(i) {
+  const s = i && i.price_source;
+  const m = { client: ['Client', '#047857', '#ecfdf5', 'Client price'],
+              standard: ['Standard', '#64748b', '#f1f5f9', 'Standard price (no agreed price for this client)'],
+              override: ['Override', '#9a5b00', '#fdefd4', 'Manual price override'] };
+  const x = m[s]; if (!x) return '';
+  return ` <span title="${x[3]}" style="font-size:.58rem;font-weight:700;background:${x[2]};color:${x[1]};border-radius:4px;padding:1px 5px;vertical-align:middle;white-space:nowrap">${x[0]}</span>`;
+}
+
+async function repriceToClientPrice(id) {
+  const p = await api('/orders/' + id + '/price-preview').catch(() => null);
+  if (!p || p.error) { showToast((p && p.error) || 'Could not load prices', 'error'); return; }
+  const rep = (p.lines || []).filter(l => l.repriceable);
+  if (!rep.length) { showToast('All lines are already at the current client price', 'info'); return; }
+  const rows = rep.map(l => `<tr>
+      <td style="padding:6px 8px">${h(l.name || l.sku)}</td>
+      <td style="padding:6px 8px;text-align:right" class="u-muted">${fmt(l.current_price)} × ${l.qty}</td>
+      <td style="padding:6px 8px;text-align:right;font-weight:700">${fmt(l.client_price)}</td>
+      <td style="padding:6px 8px;text-align:right;color:${l.diff < 0 ? 'var(--success)' : 'var(--danger)'}">${l.diff < 0 ? '−' : '+'}${fmt(Math.abs(l.diff))}</td>
+    </tr>`).join('');
+  openModal('Update to current client price',
+    `<div class="u-muted" style="font-size:.82rem;margin-bottom:10px">${rep.length} line${rep.length > 1 ? 's' : ''} differ from this client's current agreed price. Applying will re-submit the order for approval.</div>
+     <table style="width:100%;border-collapse:collapse;font-size:.82rem"><thead><tr>
+       <th style="text-align:left;padding:6px 8px;font-size:.66rem;text-transform:uppercase;color:var(--text-muted)">Item</th>
+       <th style="text-align:right;padding:6px 8px;font-size:.66rem;text-transform:uppercase;color:var(--text-muted)">Now</th>
+       <th style="text-align:right;padding:6px 8px;font-size:.66rem;text-transform:uppercase;color:var(--text-muted)">Client price</th>
+       <th style="text-align:right;padding:6px 8px;font-size:.66rem;text-transform:uppercase;color:var(--text-muted)">Δ line</th>
+     </tr></thead><tbody>${rows}</tbody></table>
+     <div style="display:flex;justify-content:space-between;margin-top:10px;padding-top:8px;border-top:1px solid var(--border);font-weight:700">
+       <span>Order subtotal</span><span>${fmt(p.current_subtotal)} → ${fmt(p.proposed_subtotal)} <span style="color:${p.diff < 0 ? 'var(--success)' : 'var(--danger)'}">(${p.diff < 0 ? '−' : '+'}${fmt(Math.abs(p.diff))})</span></span>
+     </div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-primary" ${dataAct('applyRepriceToClientPrice', id)}>Apply &amp; re-submit for approval</button>`);
+}
+async function applyRepriceToClientPrice(id) {
+  const order = await api('/orders/' + id).catch(() => null);
+  if (!order || !order.items) { showToast('Could not load the order', 'error'); return; }
+  const items = order.items.map(i => ({ sku: i.sku, name: i.name, qty: Number(i.qty) || 0, unit_price: Number(i.unit_price) || 0 }));
+  const res = await api('/orders/' + id + '/amend', { method: 'POST', body: JSON.stringify({ items, reason: 'Updated to current client price', reprice_all: true }) }).catch(() => null);
+  closeModal();
+  if (res && !res.error) { showToast(`Order ${id} re-priced to the current client price — sent for re-approval`); afterOrderAction(id, 'orders'); }
+  else showToast((res && res.error) || 'Could not apply', 'error');
+}
+
 function amendRowHTML(it) {
   const price = Number(it.unit_price) || 0;
   const delivered = Number(it.delivered) || 0;
@@ -2804,7 +2850,7 @@ function amendRowHTML(it) {
   // first row that happens to match a SKU.
   const rid = 'ar' + (APP._amendRid = (APP._amendRid || 0) + 1);
   return `<tr class="amend-row" data-rid="${rid}" data-sku="${h(it.sku)}" data-name="${h(it.name)}" data-delivered="${delivered}">
-    <td>${h(it.name)}<div class="u-subtiny" style="font-family:monospace">${h(it.sku)||'—'}</div>${delivered>0?`<div style="font-size:.68rem;color:var(--success,#0d9488);font-weight:600">${delivered} delivered · min qty ${delivered}</div>`:''}</td>
+    <td>${h(it.name)}${priceSrcBadge(it)}<div class="u-subtiny" style="font-family:monospace">${h(it.sku)||'—'}</div>${delivered>0?`<div style="font-size:.68rem;color:var(--success,#0d9488);font-weight:600">${delivered} delivered · min qty ${delivered}</div>`:''}</td>
     <td><input type="number" min="${minQty}" step="1" class="amend-qty" value="${startQty}" ${dataInput('amendRecalc')}
       style="width:66px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;text-align:right;font-size:.86rem"></td>
     <td><input type="number" min="0" step="0.01" class="amend-price" value="${price}" ${dataInput('amendRecalc')}
@@ -2863,6 +2909,7 @@ async function amendOrderModal(id) {
        <div style="display:flex;justify-content:space-between;margin-top:5px;font-weight:700;color:var(--navy)"><span>After</span><span><span id="amend-counts">0 items · 0 qty</span> · <span id="amend-total">${fmt(0)}</span></span></div>
      </div>`,
     `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button>
+     <button class="btn btn-secondary" ${dataAct('repriceToClientPrice', id)} title="Preview and apply this client's current agreed prices">💱 Use current client price</button>
      <button class="btn btn-primary" ${dataAct('submitAmendOrder', id)}>Save &amp; Re-submit for Approval</button>`);
   amendRecalc();
 }
