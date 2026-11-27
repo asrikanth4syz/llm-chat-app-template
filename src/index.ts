@@ -3,6 +3,7 @@ import {
   periodWindow, nextPeriodStart, floorMinimum, validateBudgetAmount, changeDelta,
   decideRevisionStatus, poBalance, summarizeLedger, evaluateOrderWarnings, type PeriodType,
 } from "./budget_po";
+import { pickEffectivePrice, type ResolvedPrice } from "./pricing";
 import { parsePasteText, rankCandidates, searchCandidates, rankLine, type Candidate } from "./smart_paste";
 import { computeQuote, QuoteCalcError, type QuoteCalcResult } from "./quote_calc";
 import {
@@ -7221,6 +7222,7 @@ export default {
       if (path.match(/^\/api\/orders\/[^/]+\/adjust-quantity$/) && method==="POST") return handleAdjustOrderQuantity(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/amend-reject$/)  && method==="POST") return handleRejectAmendment(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/amendments$/)    && method==="GET")  return handleListAmendments(request,env,path);
+      if (path.match(/^\/api\/orders\/[^/]+\/price-preview$/) && method==="GET")  return handleOrderPricePreview(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/transition$/)   && method==="POST") return handleTransitionOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/reopen$/)       && method==="POST") return handleReopenOrder(request,env,path);
       if (path.match(/^\/api\/orders\/[^/]+\/zoho-dc-candidates$/)   && method==="GET")  return handleZohoDcCandidates(request,env,path);
@@ -9069,6 +9071,33 @@ async function computeOrderGst(env: Env, items: Array<{ sku: string; qty: number
   return Math.round(items.reduce((s, i) => s + i.qty * i.unit_price * rateOf(i.sku) / 100, 0));
 }
 
+// ── Client pricing (single resolver, effective-dated) ─────────────────
+let _pricingReady = false;
+async function ensurePricingSchema(env: Env): Promise<void> {
+  if (_pricingReady) return;
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS client_price_history ( id TEXT PRIMARY KEY, client_id TEXT NOT NULL, sku TEXT NOT NULL, price REAL NOT NULL, effective_from TEXT NOT NULL, created_by TEXT, created_by_name TEXT, note TEXT, created_at TEXT DEFAULT (datetime('now')) )").run().catch(() => {});
+  await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_client_price_history ON client_price_history (client_id, sku, effective_from)").run().catch(() => {});
+  await env.DB.prepare("ALTER TABLE order_items ADD COLUMN price_source TEXT").run().catch(() => {});
+  _pricingReady = true;
+}
+// The one price resolver: the client's dated agreed price in effect on refDate, else
+// their legacy undated catalog price, else the universal/standard price. Used by order
+// creation and amendment so a line is priced the same way everywhere.
+async function resolveClientPrice(env: Env, clientId: string | null | undefined, sku: string, refDate: string): Promise<ResolvedPrice> {
+  await ensurePricingSchema(env);
+  const inv = await env.DB.prepare("SELECT unit_price FROM inventory WHERE sku=?").bind(sku).first() as { unit_price?: number } | null;
+  const standard = inv && inv.unit_price != null ? Number(inv.unit_price) : null;
+  let catalogPrice: number | null = null;
+  let hist: { price: number; effective_from: string }[] = [];
+  if (clientId) {
+    const cat = await env.DB.prepare("SELECT client_price FROM client_catalog WHERE client_id=? AND sku=?").bind(clientId, sku).first() as { client_price?: number | null } | null;
+    catalogPrice = cat && cat.client_price != null ? Number(cat.client_price) : null;
+    const { results } = await env.DB.prepare("SELECT price, effective_from FROM client_price_history WHERE client_id=? AND sku=?").bind(clientId, sku).all();
+    hist = (results as Record<string, unknown>[]).map(r => ({ price: Number(r.price), effective_from: String(r.effective_from) }));
+  }
+  return pickEffectivePrice(hist, catalogPrice, standard, refDate);
+}
+
 async function handleCreateOrder(request: Request, env: Env): Promise<Response> {
   const user = await getUser(request, env);
   const denied = requireUser(user);
@@ -9135,6 +9164,18 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
 
   const id = `SP-${new Date().toISOString().slice(2,7).replace("-","")}-${Math.floor(Math.random()*9000+1000)}`;
   const effRef = orderRef || id;
+  // One price resolver: price every line for THIS client as of the order date, so an
+  // ops/provider-placed order gets the same agreed price a client order would. A line
+  // is only re-priced when an agreed CLIENT price exists; otherwise the submitted
+  // (catalogue/ad-hoc) price stands. Each line records where its price came from.
+  {
+    const orderDate = new Date().toISOString().slice(0, 10);
+    for (const it of body.items as Array<Record<string, unknown>>) {
+      const r = await resolveClientPrice(env, body.client_id, String(it.sku || ""), orderDate);
+      if (r.known && r.source === "client") { it.unit_price = r.price; it._src = "client"; }
+      else it._src = "standard";
+    }
+  }
   const subtotal = body.items.reduce((s,i)=>s+i.qty*i.unit_price, 0);
   const gst = await computeOrderGst(env, body.items);
   const grand_total = subtotal+gst;
@@ -9147,8 +9188,8 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
     await env.DB.prepare(`INSERT INTO orders (id,client_id,created_by,status,subtotal,gst,grand_total,notes,order_type,need_by_date,order_image,order_period,order_reference,location_id,po_id,po_override_reason) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
       .bind(id, body.client_id, user!.sub, "DRAFT", subtotal, gst, grand_total, body.notes||null, orderType, needByDate, orderImage, orderPeriod, effRef, locationId, poId, poOverride).run();
     for (const item of body.items) {
-      await env.DB.prepare(`INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total,item_note) VALUES (?,?,?,?,?,?,?,?)`)
-        .bind(uid(), id, item.sku, item.name, item.qty, item.unit_price, item.qty*item.unit_price, item.note||null).run();
+      await env.DB.prepare(`INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total,item_note,price_source) VALUES (?,?,?,?,?,?,?,?,?)`)
+        .bind(uid(), id, item.sku, item.name, item.qty, item.unit_price, item.qty*item.unit_price, item.note||null, (item as Record<string,unknown>)._src || "standard").run();
     }
     await env.DB.prepare(`INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,NULL,?,?,?,?)`)
       .bind(uid(), id, "DRAFT", user!.sub, user!.name, "Saved as draft").run();
@@ -9189,8 +9230,8 @@ async function handleCreateOrder(request: Request, env: Env): Promise<Response> 
   }
 
   for (const item of body.items) {
-    await env.DB.prepare(`INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total,item_note) VALUES (?,?,?,?,?,?,?,?)`)
-      .bind(uid(), id, item.sku, item.name, item.qty, item.unit_price, item.qty*item.unit_price, item.note||null).run();
+    await env.DB.prepare(`INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total,item_note,price_source) VALUES (?,?,?,?,?,?,?,?,?)`)
+      .bind(uid(), id, item.sku, item.name, item.qty, item.unit_price, item.qty*item.unit_price, item.note||null, (item as Record<string,unknown>)._src || "standard").run();
     // Gap 9: reserve stock — skipped for un-priced ad-hoc lines (placeholder SKUs
     // aren't real inventory yet; reservation happens when Ops prices the order).
     if (!awaitingPricing)
@@ -9717,6 +9758,9 @@ async function handleAmendOrder(request: Request, env: Env, path: string): Promi
   const body = await request.json().catch(() => ({})) as {
     items?: Array<{ sku: string; name: string; qty: number; unit_price: number; note?: string }>;
     reason?: string;
+    reprice_all?: boolean;               // apply the current client price to every non-delivered line
+    reprice_skus?: string[];             // apply the current client price to these SKUs
+    overrides?: Record<string, number>;  // manual price overrides (flagged)
   };
   const reason = String(body.reason || "").trim();
   if (!reason) return json({ error: "A reason for the change is required" }, 400);
@@ -9735,6 +9779,7 @@ async function handleAmendOrder(request: Request, env: Env, path: string): Promi
     qty: Math.max(0, Number(i.qty) || 0),
     unit_price: Math.max(0, Number(i.unit_price) || 0),
     note: (i.note ? String(i.note) : null) as string | null,
+    _src: "standard" as string,
   })).filter(i => i.sku && i.qty > 0);
   if (!newItems.length) return json({ error: "Every line needs a SKU and a quantity greater than zero" }, 400);
 
@@ -9757,6 +9802,40 @@ async function handleAmendOrder(request: Request, env: Env, path: string): Promi
 
   const { results: oldItems } = await env.DB.prepare("SELECT * FROM order_items WHERE order_id=?").bind(id).all() as { results: Record<string, unknown>[] };
 
+  // Price every amended line through the single resolver, as of the amendment date:
+  //  • a delivered line is never re-priced (keeps its stored price + source);
+  //  • a manual override (overrides[sku]) keeps that price and is flagged;
+  //  • a newly added line, or any line flagged for reprice, gets the current client price;
+  //  • an existing line edited inline to a different price is a flagged override;
+  //  • otherwise the line keeps its existing price (a quantity-only change).
+  const oldBySku = new Map(oldItems.map(i => [String(i.sku), i]));
+  const amendDate = new Date().toISOString().slice(0, 10);
+  const repAll = !!body.reprice_all;
+  const repSet = new Set((body.reprice_skus || []).map(String));
+  const overrides = body.overrides || {};
+  let overrode = false;
+  for (const it of newItems) {
+    const old = oldBySku.get(it.sku);
+    const delivered = deliveredBySku[it.sku] || 0;
+    if (old && delivered > 0) { it.unit_price = Number(old.unit_price) || 0; it._src = String(old.price_source || "standard"); continue; }
+    if (Object.prototype.hasOwnProperty.call(overrides, it.sku)) { it.unit_price = Math.max(0, Number(overrides[it.sku]) || 0); it._src = "override"; overrode = true; continue; }
+    if (!old) {
+      // Newly added line: price it at the client's agreed price when one exists; otherwise
+      // keep the submitted (catalogue/ad-hoc) price, which is the standard price.
+      const r = await resolveClientPrice(env, String(order.client_id || ""), it.sku, amendDate);
+      if (r.known && r.source === "client") { it.unit_price = r.price; it._src = "client"; } else it._src = "standard";
+      continue;
+    }
+    if (repAll || repSet.has(it.sku)) {
+      const r = await resolveClientPrice(env, String(order.client_id || ""), it.sku, amendDate);
+      if (r.known && r.source === "client") { it.unit_price = r.price; it._src = "client"; } else { it.unit_price = Number(old.unit_price) || 0; it._src = String(old.price_source || "standard"); }
+      continue;
+    }
+    const oldP = Number(old.unit_price) || 0;
+    if (it.unit_price !== oldP) { it._src = "override"; overrode = true; } // inline price edit = manual override
+    else { it.unit_price = oldP; it._src = String(old.price_source || "standard"); }
+  }
+
   const subtotal = newItems.reduce((s, i) => s + i.qty * i.unit_price, 0);
   const gst = await computeOrderGst(env, newItems);
   const grand_total = subtotal + gst;
@@ -9771,8 +9850,8 @@ async function handleAmendOrder(request: Request, env: Env, path: string): Promi
   await env.DB.prepare("DELETE FROM order_items WHERE order_id=?").bind(id).run();
   await env.DB.prepare("DELETE FROM order_allocations WHERE order_id=?").bind(id).run();
   for (const it of newItems) {
-    await env.DB.prepare("INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total,item_note) VALUES (?,?,?,?,?,?,?,?)")
-      .bind(uid(), id, it.sku, it.name, it.qty, it.unit_price, it.qty * it.unit_price, it.note).run();
+    await env.DB.prepare("INSERT INTO order_items (id,order_id,sku,name,qty,unit_price,total,item_note,price_source) VALUES (?,?,?,?,?,?,?,?,?)")
+      .bind(uid(), id, it.sku, it.name, it.qty, it.unit_price, it.qty * it.unit_price, it.note, it._src || "standard").run();
     // Reserve only the still-to-deliver balance (delivered qty is already gone).
     const toReserve = Math.max(0, it.qty - (deliveredBySku[it.sku] || 0));
     if (toReserve > 0) await env.DB.prepare("UPDATE inventory SET reserved=MIN(stock,reserved+?) WHERE sku=?").bind(toReserve, it.sku).run();
@@ -9790,7 +9869,7 @@ async function handleAmendOrder(request: Request, env: Env, path: string): Promi
   await env.DB.prepare("INSERT INTO order_history (id,order_id,from_status,to_status,actor_id,actor_name,note) VALUES (?,?,?,?,?,?,?)")
     .bind(uid(), id, fromStatus, "PENDING_APPROVAL", user!.sub, user!.name, `Amended (rev ${revision}) — ${reason}`).run();
   await pushNotification(env, "client_approver", `Order ${id} was changed (rev ${revision}) — your approval is needed`);
-  await audit(env, user, "AMEND", "order", id, fromStatus, `rev:${revision},total:${grand_total},reason:${reason.slice(0, 80)}`);
+  await audit(env, user, "AMEND", "order", id, fromStatus, `rev:${revision},total:${grand_total}${overrode ? ",manual_price_override" : ""},reason:${reason.slice(0, 80)}`);
   return json({ id, status: "PENDING_APPROVAL", revision, grand_total });
 }
 
@@ -9877,6 +9956,39 @@ async function handleAdjustOrderQuantity(request: Request, env: Env, path: strin
     .bind(uid(), id, status, newStatus, user!.sub, user!.name, `Quantity adjusted post-delivery (rev ${revision}) — ${reason}`).run();
   await audit(env, user, "ADJUST_QTY", "order", id, status, JSON.stringify({ applied, grand_total, reason: reason.slice(0, 80) }));
   return json({ ok: true, id, status: newStatus, revision, grand_total, applied });
+}
+
+// GET /api/orders/:id/price-preview — per-line current price + source vs the current
+// client price (resolved as of today), for the "Update to current client price" action.
+async function handleOrderPricePreview(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env);
+  const denied = requireUser(user); if (denied) return denied;
+  if (!ORDER_AMEND_ROLES.includes(user!.role)) return json({ error: "Forbidden — ops only" }, 403);
+  await ensurePricingSchema(env);
+  const id = path.split("/").slice(-2)[0];
+  const order = await env.DB.prepare("SELECT id, client_id FROM orders WHERE id=?").bind(id).first() as Record<string, unknown> | null;
+  if (!order) return json({ error: "Not found" }, 404);
+  const { results: items } = await env.DB.prepare("SELECT sku,name,qty,unit_price,price_source FROM order_items WHERE order_id=?").bind(id).all() as { results: Record<string, unknown>[] };
+  const { results: delRows } = await env.DB.prepare(
+    "SELECT di.sku AS sku, SUM(di.qty_delivered) AS delivered FROM delivery_challans dc JOIN dc_items di ON di.dc_id=dc.id WHERE dc.order_id=? AND dc.status='DELIVERED' GROUP BY di.sku"
+  ).bind(id).all() as { results: Array<{ sku: string; delivered: number }> };
+  const deliveredBySku: Record<string, number> = {};
+  for (const r of delRows) deliveredBySku[r.sku] = Number(r.delivered) || 0;
+  const today = new Date().toISOString().slice(0, 10);
+  let curSub = 0, propSub = 0;
+  const lines: Record<string, unknown>[] = [];
+  for (const it of items) {
+    const cur = Number(it.unit_price) || 0, qty = Number(it.qty) || 0;
+    const delivered = (deliveredBySku[String(it.sku)] || 0) > 0;
+    const r = await resolveClientPrice(env, String(order.client_id || ""), String(it.sku), today);
+    const repriceable = !delivered && r.known && r.source === "client" && r.price !== cur;
+    const proposed = repriceable ? r.price : cur;
+    curSub += cur * qty; propSub += proposed * qty;
+    lines.push({ sku: it.sku, name: it.name, qty, current_price: cur, current_source: it.price_source || "standard",
+      client_price: r.known && r.source === "client" ? r.price : null, client_source: r.source, effective_from: r.effective_from,
+      proposed_price: proposed, diff: (proposed - cur) * qty, delivered, repriceable });
+  }
+  return json({ order_id: id, lines, current_subtotal: curSub, proposed_subtotal: propSub, diff: propSub - curSub });
 }
 
 // GET /api/orders/:id/amendments — amendment history for an order (ops only).
@@ -13565,10 +13677,20 @@ async function handlePatchClientCatalogItem(request: Request, env: Env, path: st
   const parts = path.split("/");
   const clientId = parts[3];
   const sku = parts[5];
-  const body = await request.json() as { client_price?: number | null };
+  const body = await request.json() as { client_price?: number | null; effective_from?: string; note?: string };
   await env.DB.prepare("UPDATE client_catalog SET client_price=? WHERE client_id=? AND sku=?")
     .bind(body.client_price ?? null, clientId, sku).run();
-  await audit(env, user, "UPDATE", "client_catalog", clientId, sku, `client_price:${body.client_price}`);
+  // Record the agreed price with an effective date so it resolves correctly for orders
+  // placed on or after that date (the single resolver reads this history first).
+  if (body.client_price != null) {
+    await ensurePricingSchema(env);
+    const eff = /^\d{4}-\d{2}-\d{2}$/.test(String(body.effective_from || "")) ? String(body.effective_from) : new Date().toISOString().slice(0, 10);
+    await env.DB.prepare("INSERT INTO client_price_history (id,client_id,sku,price,effective_from,created_by,created_by_name,note) VALUES (?,?,?,?,?,?,?,?)")
+      .bind(uid(), clientId, sku, Number(body.client_price), eff, user!.sub, user!.name, String(body.note || "") || null).run().catch(() => {});
+    await audit(env, user, "UPDATE", "client_catalog", clientId, sku, `client_price:${body.client_price},effective_from:${eff}`);
+  } else {
+    await audit(env, user, "UPDATE", "client_catalog", clientId, sku, `client_price:cleared`);
+  }
   return json({ok: true, client_price: body.client_price ?? null});
 }
 
