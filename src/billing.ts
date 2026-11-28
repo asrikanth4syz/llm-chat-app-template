@@ -264,3 +264,51 @@ export const BILLING_LIFECYCLE: BillingLifecycle[] = [
   "Invoice Generated", "Pending Submission", "Partially Submitted", "Submitted",
 ];
 export const BILLING_EXCEPTIONS: BillingException[] = ["On Hold", "No DCs Available", "Cancelled", "Correction Required"];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 2 — My Tasks + reminder/escalation logic (pure).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Whole days from today to a target date (positive = future, negative = overdue).
+export function daysUntil(targetISO: string, todayISO: string): number {
+  const a = new Date(targetISO + "T00:00:00Z").getTime();
+  const b = new Date(todayISO + "T00:00:00Z").getTime();
+  return Math.round((a - b) / 86400000);
+}
+
+export type ReminderAudience = "owner" | "owner+manager" | "management";
+export interface ReminderStage { kind: string; threshold: number; audience: ReminderAudience; label: string; }
+// A stage is "active" once daysToDeadline <= threshold. Fired once each (deduped).
+export const REMINDER_STAGES: ReminderStage[] = [
+  { kind: "3d", threshold: 3, audience: "owner", label: "due in 3 days" },
+  { kind: "1d", threshold: 1, audience: "owner", label: "due in 1 day" },
+  { kind: "due", threshold: 0, audience: "owner", label: "due today" },
+  { kind: "od1", threshold: -1, audience: "owner", label: "1 day overdue" },
+  { kind: "od3", threshold: -3, audience: "owner+manager", label: "3 days overdue" },
+  { kind: "od7", threshold: -7, audience: "management", label: "7 days overdue" },
+];
+export function activeReminders(daysToDeadline: number): ReminderStage[] {
+  return REMINDER_STAGES.filter((s) => daysToDeadline <= s.threshold);
+}
+export function currentReminder(daysToDeadline: number): ReminderStage | null {
+  const a = activeReminders(daysToDeadline);
+  return a.length ? a[a.length - 1] : null;
+}
+
+// The owner's next action for a task, from its billing status + lifecycle.
+export function taskNextAction(status: string, submissionStatus: string, lifecycle: string | null, dcCount: number): string {
+  if (status === "Cancelled") return "—";
+  if (status === "Recorded") return submissionStatus === "Submitted" ? "Done" : "Submit invoice";
+  if ((lifecycle || "") === "No DCs Available" && dcCount === 0) return "Review — no DCs";
+  if (dcCount === 0) return "Select DCs";
+  return "Record invoice";
+}
+// Bucket a task for My Tasks: completed / overdue / due_today / upcoming.
+export function taskBucket(status: string, submissionStatus: string, deadline: string | null, todayISO: string): "completed" | "overdue" | "due_today" | "upcoming" {
+  if (status === "Recorded" && submissionStatus === "Submitted") return "completed";
+  if (!deadline) return "upcoming";
+  const d = daysUntil(deadline, todayISO);
+  if (d < 0) return "overdue";
+  if (d === 0) return "due_today";
+  return "upcoming";
+}

@@ -1684,6 +1684,21 @@ function editClientById(id) { const c = APP._clientById && APP._clientById[id]; 
 function dataAct(fn, ...args) {
   return `data-act="${fn}"${args.length ? ` data-args="${h(JSON.stringify(args))}"` : ''}`;
 }
+// Shared client-name label: show the legal name AND the display name together so
+// two entities with the same legal name are told apart. Use everywhere a client's
+// legal name is shown. Returns escaped HTML; pass the raw legal + display strings.
+function clientLabel(legal, display) {
+  const L = (legal == null ? '' : String(legal)).trim();
+  const D = (display == null ? '' : String(display)).trim();
+  if (D && D !== L) return `${h(L)} <span class="u-muted" style="font-weight:600">· ${h(D)}</span>`;
+  return h(L || D || '—');
+}
+// Plain-text variant (for titles/attributes where HTML isn't rendered).
+function clientLabelText(legal, display) {
+  const L = (legal == null ? '' : String(legal)).trim();
+  const D = (display == null ? '' : String(display)).trim();
+  return (D && D !== L) ? `${L} · ${D}` : (L || D || '—');
+}
 // Variant for handlers whose original inline form passed `this` (the clicked
 // element) as the last argument, e.g. a tab switcher called with (key, this).
 function dataActEl(fn, ...args) {

@@ -184,3 +184,45 @@ describe("labels + lifecycle", () => {
     expect(BILLING_LIFECYCLE[BILLING_LIFECYCLE.length - 1]).toBe("Submitted");
   });
 });
+
+import { daysUntil, activeReminders, currentReminder, taskNextAction, taskBucket, REMINDER_STAGES } from "../src/billing";
+
+describe("reminder stages", () => {
+  it("daysUntil counts whole days either side", () => {
+    expect(daysUntil("2026-12-05", "2026-11-30")).toBe(5);
+    expect(daysUntil("2026-11-28", "2026-11-30")).toBe(-2);
+    expect(daysUntil("2026-11-30", "2026-11-30")).toBe(0);
+  });
+  it("activates cumulatively and picks the most severe current stage", () => {
+    expect(currentReminder(5)).toBeNull();            // nothing yet
+    expect(currentReminder(3)?.kind).toBe("3d");
+    expect(currentReminder(2)?.kind).toBe("3d");      // still the 3-day reminder
+    expect(currentReminder(1)?.kind).toBe("1d");
+    expect(currentReminder(0)?.kind).toBe("due");
+    expect(currentReminder(-1)?.kind).toBe("od1");
+    expect(currentReminder(-3)?.kind).toBe("od3");
+    expect(currentReminder(-8)?.kind).toBe("od7");    // 8 overdue → still the 7-day escalation
+  });
+  it("escalation audience widens with overdue depth", () => {
+    expect(currentReminder(0)?.audience).toBe("owner");
+    expect(currentReminder(-3)?.audience).toBe("owner+manager");
+    expect(currentReminder(-7)?.audience).toBe("management");
+    expect(activeReminders(-7).map((s) => s.kind)).toEqual(["3d", "1d", "due", "od1", "od3", "od7"]);
+  });
+});
+
+describe("task next action + bucket", () => {
+  it("next action tracks the lifecycle", () => {
+    expect(taskNextAction("Draft", "Not Ready", "To Be Billed", 0)).toBe("Select DCs");
+    expect(taskNextAction("Draft", "Not Ready", "Under Preparation", 2)).toBe("Record invoice");
+    expect(taskNextAction("Draft", "Not Ready", "No DCs Available", 0)).toBe("Review — no DCs");
+    expect(taskNextAction("Recorded", "Pending Submission", "Pending Submission", 2)).toBe("Submit invoice");
+    expect(taskNextAction("Recorded", "Submitted", "Submitted", 2)).toBe("Done");
+  });
+  it("buckets by deadline and completion", () => {
+    expect(taskBucket("Recorded", "Submitted", "2026-11-01", "2026-11-30")).toBe("completed");
+    expect(taskBucket("Draft", "Not Ready", "2026-11-20", "2026-11-30")).toBe("overdue");
+    expect(taskBucket("Draft", "Not Ready", "2026-11-30", "2026-11-30")).toBe("due_today");
+    expect(taskBucket("Draft", "Not Ready", "2026-12-10", "2026-11-30")).toBe("upcoming");
+  });
+});

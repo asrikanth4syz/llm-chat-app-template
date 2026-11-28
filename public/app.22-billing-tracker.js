@@ -26,6 +26,7 @@ function btRender() {
   el.innerHTML = `
     <div class="tabs" style="margin-bottom:14px">
       ${btSubtab('overview', 'Overview')}
+      ${btSubtab('mytasks', 'My Tasks')}
       ${btSubtab('tobill', 'To Be Billed')}
       ${btSubtab('invoices', 'Invoices')}
       ${btSubtab('rules', 'Billing Rules')}
@@ -38,9 +39,44 @@ function btGo(tab) { APP._bt.tab = tab; btRender(); }
 async function btBody() {
   const body = document.getElementById('bt-body'); if (!body) return;
   if (APP._bt.tab === 'overview') return btOverview(body);
+  if (APP._bt.tab === 'mytasks') return btMyTasks(body);
   if (APP._bt.tab === 'tobill') return btToBill(body);
   if (APP._bt.tab === 'invoices') return btInvoices(body);
   if (APP._bt.tab === 'rules') return btRules(body);
+}
+
+async function btMyTasks(body) {
+  const r = await api('/billing/my-tasks'); if (!r) return;
+  const c = r.counts || {};
+  const groups = [
+    { key: 'overdue', title: 'Overdue', accent: 'var(--danger)' },
+    { key: 'due_today', title: 'Due today', accent: '#B5731A' },
+    { key: 'upcoming', title: 'Upcoming', accent: 'var(--navy)' },
+    { key: 'completed', title: 'Completed', accent: 'var(--success)' },
+  ];
+  const byBucket = { overdue: [], due_today: [], upcoming: [], completed: [] };
+  (r.tasks || []).forEach(t => { (byBucket[t.bucket] || byBucket.upcoming).push(t); });
+  const row = t => `<tr>
+    <td><b>${clientLabel(t.client_name, t.client_display_name)}</b>${t.category ? ` <span class="badge" style="font-size:.6rem;background:var(--bg);border:1px solid var(--border)">${h(t.category)}</span>` : ''}${t.cycle_label ? `<div class="u-subtiny">${h(t.cycle_label)}</div>` : ''}</td>
+    <td><span class="badge" style="background:var(--bg);border:1px solid var(--border);font-size:.66rem">${h(t.lifecycle || t.status)}</span></td>
+    <td><b>${h(t.next_action)}</b></td>
+    <td>${t.deadline ? fmtDate(t.deadline) : '—'}<div class="u-subtiny">${t.deadline_kind === 'submission' ? 'submission' : 'invoice'}${t.bucket === 'overdue' ? ` · ${t.overdue_days}d late` : ''}</div></td>
+    <td class="u-right">${t.total_amount != null ? fmt(t.total_amount) : fmt(t.allocated_value)}</td>
+    <td><button class="btn btn-sm btn-secondary" ${dataAct('btOpen', t.id)}>Open</button></td>
+  </tr>`;
+  body.innerHTML = `
+    <div class="tile-grid" style="grid-template-columns:repeat(auto-fill,minmax(150px,1fr));margin-bottom:16px">
+      ${tileHtml({ label: 'Overdue', value: c.overdue || 0, accent: c.overdue ? 'var(--danger)' : 'var(--success)' })}
+      ${tileHtml({ label: 'Due today', value: c.due_today || 0, accent: c.due_today ? '#B5731A' : 'var(--text-muted)' })}
+      ${tileHtml({ label: 'Upcoming', value: c.upcoming || 0, accent: 'var(--navy)' })}
+      ${tileHtml({ label: 'Completed', value: c.completed || 0, accent: 'var(--success)' })}
+    </div>
+    ${(r.tasks || []).length ? groups.map(g => byBucket[g.key].length ? `
+      <div class="card" style="margin-bottom:12px"><div class="card-header"><span style="color:${g.accent}">${g.title} (${byBucket[g.key].length})</span></div>
+      <div class="table-wrap"><table class="table">
+        <thead><tr><th>Client / period</th><th>Stage</th><th>Next action</th><th>Target</th><th class="u-right">Amount</th><th></th></tr></thead>
+        <tbody>${byBucket[g.key].map(row).join('')}</tbody></table></div></div>` : '').join('')
+      : '<div class="card"><p class="u-muted" style="margin:0">No billing tasks assigned to you. Tasks appear here once rules generate them or a manager assigns one.</p></div>'}`;
 }
 
 async function btGenerate() {
@@ -233,7 +269,7 @@ async function btInvoices(body) {
         const stage = i.exception || i.lifecycle || (i.status === 'Recorded' ? 'Invoice Generated' : 'Under Preparation');
         return `<tr>
           <td>${h(i.owner_name || '—')}</td>
-          <td><b>${h(i.client_name || '—')}</b>${i.category ? ` <span class="badge" style="font-size:.6rem;background:var(--bg);border:1px solid var(--border)">${h(i.category)}</span>` : ''}${i.period_label ? `<div class="u-subtiny">${h(i.period_label)}</div>` : ''}</td>
+          <td><b>${clientLabel(i.client_name, i.client_display_name)}</b>${i.category ? ` <span class="badge" style="font-size:.6rem;background:var(--bg);border:1px solid var(--border)">${h(i.category)}</span>` : ''}${i.period_label ? `<div class="u-subtiny">${h(i.period_label)}</div>` : ''}</td>
           <td><span class="badge" style="background:var(--bg);border:1px solid var(--border);font-size:.66rem;color:${i.exception ? 'var(--danger)' : 'var(--text-muted)'}">${h(stage)}</span></td>
           <td>${i.invoice_no ? `<b>${h(i.invoice_no)}</b>` : '<span class="u-muted">Not yet invoiced</span>'}</td>
           <td>${i.invoice_date ? fmtDate(i.invoice_date) : '—'}</td>
@@ -257,7 +293,7 @@ async function btOpen(id) {
   const reqChips = [inv.req_email && 'Email', inv.req_portal && 'Portal', inv.req_hardcopy && 'Hard copy'].filter(Boolean).join(' · ') || 'None required';
   const body = `
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">${btStatusBadge(inv.status)} ${isRec ? btSubBadge(inv.submission_status) : ''}
-      <span class="u-muted" style="font-size:.82rem">${h(inv.client_name || '')}${inv.period_label ? ' · ' + h(inv.period_label) : ''}</span></div>
+      <span class="u-muted" style="font-size:.82rem">${clientLabel(inv.client_name, inv.client_display_name)}${inv.period_label ? ' · ' + h(inv.period_label) : ''}</span></div>
     <div class="card" style="margin-bottom:10px"><div class="card-header"><span>Delivery challans (${dcs.length})</span><span class="u-muted" style="font-size:.82rem">Allocated ${fmt(inv.allocated_value)}</span></div>
       <div class="table-wrap"><table class="table"><thead><tr><th>DC #</th><th class="u-right">Value</th></tr></thead><tbody>${dcList || '<tr><td colspan="2" class="u-empty">None</td></tr>'}</tbody></table></div></div>
     ${isRec ? `<div class="card" style="margin-bottom:10px;font-size:.86rem"><b>Invoice ${h(inv.invoice_no)}</b> · ${fmtDate(inv.invoice_date)} · Taxable ${fmt(inv.taxable_amount)} + GST ${fmt(inv.gst_amount)} = <b>${fmt(inv.total_amount)}</b>${Math.abs(Number(inv.total_amount || 0) - Number(inv.allocated_value || 0)) > 0.5 ? `<div style="color:var(--danger);font-size:.78rem;margin-top:3px">⚠ Differs from allocated DC value (${fmt(inv.allocated_value)}) by ${fmt(Math.abs(Number(inv.total_amount) - Number(inv.allocated_value)))}</div>` : ''}</div>` : ''}

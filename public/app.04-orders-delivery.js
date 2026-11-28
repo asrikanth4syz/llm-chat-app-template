@@ -1456,7 +1456,7 @@ function ofTabOverview() {
   const commentsBody = `<div id="order-comments" style="display:grid;gap:8px">${(c.comments || []).length
     ? c.comments.map(cm => `<div style="background:var(--bg,var(--surface-2));border-radius:8px;padding:9px 11px;font-size:.84rem"><div style="display:flex;justify-content:space-between;margin-bottom:3px"><b>${h(cm.author_name)}</b><span class="u-muted">${timeAgo(cm.created_at)}</span></div><div>${h(cm.message)}</div></div>`).join('')
     : `<p class="u-muted" style="font-size:.84rem;margin:0">No comments yet.</p>`}</div>`;
-  return `<div class="sub" style="color:var(--text-muted);font-size:.84rem;margin:12px 2px 0">${h(order.client_name || '—')} · Placed ${fmtDate(order.created_at)} · ${h(order.order_type || 'Regular')}${order.order_period ? ' · For ' + new Date(order.order_period + '-01').toLocaleDateString('en-IN', { month: 'short', year: 'numeric' }) : ''}${order.order_reference && order.order_reference !== order.id ? ' · Ref ' + h(order.order_reference) : ''}</div>
+  return `<div class="sub" style="color:var(--text-muted);font-size:.84rem;margin:12px 2px 0">${clientLabel(order.client_name, order.client_display_name)} · Placed ${fmtDate(order.created_at)} · ${h(order.order_type || 'Regular')}${order.order_period ? ' · For ' + new Date(order.order_period + '-01').toLocaleDateString('en-IN', { month: 'short', year: 'numeric' }) : ''}${order.order_reference && order.order_reference !== order.id ? ' · Ref ' + h(order.order_reference) : ''}</div>
   <div class="ofgrid">
     <div class="ofstack">
       <div class="card">${ofStepperHtml(order)}</div>
@@ -1923,7 +1923,7 @@ async function openOrderDrawer(id, triggerEl) {
   const naBtn = pa && pa.act ? `<button class="btn" ${pa.act}>${h(pa.label)} →</button>` : '';
   dr.innerHTML = `<div class="in">
     <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
-      <div><div style="font-size:1.1rem;font-weight:800;color:var(--navy)">${h(order.id)}</div><div class="u-muted" style="font-size:.84rem">${h(order.client_name || '—')}</div></div>
+      <div><div style="font-size:1.1rem;font-weight:800;color:var(--navy)">${h(order.id)}</div><div class="u-muted" style="font-size:.84rem">${clientLabel(order.client_name, order.client_display_name)}</div></div>
       <button class="btn" id="od-x" ${dataAct('closeOrderDrawer')} aria-label="Close preview">✕</button>
     </div>
     <div style="margin-top:10px">${statusBadge(order.status)}</div>
@@ -3075,7 +3075,7 @@ async function viewOrderDrilldown(orderId) {
   <!-- Order header strip: client / dates / status / challans / ordered-vs-delivered -->
   <div style="border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:18px;background:var(--surface)">
     <div style="display:grid;grid-template-columns:1.6fr 1fr 1fr 1fr .7fr 1.3fr">
-      ${hdCell('Client', h(order.client_name||'—'))}
+      ${hdCell('Client', clientLabel(order.client_name, order.client_display_name))}
       ${hdCell('Ordered Date', order.created_at?fmtDate(order.created_at):'—')}
       ${hdCell('Delivered', lastDeliv?`${fmtDate(lastDeliv)} <span style="font-weight:500;color:var(--text-muted);font-size:.78rem">(last)</span>`:'<span style="color:var(--text-muted);font-weight:500">—</span>')}
       ${hdCell('Status', statusBadge(order.status))}

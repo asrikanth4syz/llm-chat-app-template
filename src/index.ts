@@ -8,6 +8,7 @@ import {
   periodsBetween, periodContaining, invoiceTargetDate, submissionTargetDate,
   deriveSubmission, money as billMoney, type BillingFrequency, BILLING_FREQUENCIES,
   cyclesBetween, deadlineFrom, type CycleConfig,
+  daysUntil, activeReminders, taskNextAction, taskBucket,
 } from "./billing";
 import { parsePasteText, rankCandidates, searchCandidates, rankLine, type Candidate } from "./smart_paste";
 import { computeQuote, QuoteCalcError, type QuoteCalcResult } from "./quote_calc";
@@ -7069,6 +7070,8 @@ export default {
         catch (e) { console.error("reminder pass cron error:", String(e)); }
         try { await runQuoteReminderPass(env); }
         catch (e) { console.error("quote reminder pass cron error:", String(e)); }
+        try { const b = await runBillingReminders(env); if (b.sent) console.log("billing reminders:", JSON.stringify(b)); }
+        catch (e) { console.error("billing reminder pass cron error:", String(e)); }
         return;
       }
       // Nightly recurring-order generation (09:30 IST). Materialises due plan
@@ -7366,6 +7369,8 @@ export default {
       if (path.match(/^\/api\/billing\/rules\/[^/]+$/)           && method==="PUT")  return handleUpdateBillingRule(request,env,path);
       if (path==="/api/billing/generate"                         && method==="POST") return handleGenerateBilling(request,env);
       if (path.match(/^\/api\/billing\/invoices\/[^/]+\/add-dcs$/)&& method==="POST") return handleAddDcsToTask(request,env,path);
+      if (path==="/api/billing/my-tasks"                         && method==="GET")  return handleMyBillingTasks(request,env);
+      if (path==="/api/billing/run-reminders"                    && method==="POST") return handleRunBillingReminders(request,env);
       if (path.match(/^\/api\/clients\/[^/]+\/locations$/) && method==="POST") return handleAddClientLocation(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/locations\/[^/]+$/) && method==="PATCH") return handlePatchClientLocation(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/rename$/) && method==="POST") return handleRenameClient(request,env,path);
@@ -7944,7 +7949,7 @@ async function handleGetOrder(request: Request, env: Env, path: string): Promise
   if (denied) return denied;
   const id = path.split("/").pop()!;
 
-  const order = await env.DB.prepare(`SELECT o.*,c.name as client_name,c.delay_tracking_enabled AS client_delay_tracking,u.name as creator_name
+  const order = await env.DB.prepare(`SELECT o.*,c.name as client_name,c.display_name AS client_display_name,c.delay_tracking_enabled AS client_delay_tracking,u.name as creator_name
     FROM orders o LEFT JOIN clients c ON o.client_id=c.id LEFT JOIN users u ON o.created_by=u.id WHERE o.id=?`).bind(id).first();
   if (!order) return json({error:"Not found"}, 404);
   const cross = await denyClientCrossAccess(env, user!, (order as Record<string, unknown>).client_id); if (cross) return cross;
@@ -13639,7 +13644,7 @@ async function handleListBillingInvoices(request: Request, env: Env): Promise<Re
   if (q.get("owner")) { where.push("bi.owner=?"); vals.push(q.get("owner")); }
   if (q.get("period_id")) { where.push("bi.period_id=?"); vals.push(q.get("period_id")); }
   const { results } = await env.DB.prepare(
-    `SELECT bi.*, c.name AS client_name, bp.label AS period_label,
+    `SELECT bi.*, c.name AS client_name, c.display_name AS client_display_name, bp.label AS period_label,
             (SELECT COUNT(*) FROM billing_invoice_dcs x WHERE x.invoice_id=bi.id) AS dc_count
      FROM billing_invoices bi LEFT JOIN clients c ON bi.client_id=c.id LEFT JOIN billing_periods bp ON bi.period_id=bp.id
      WHERE ${where.join(" AND ")} ORDER BY bi.created_at DESC LIMIT 300`
@@ -13653,7 +13658,7 @@ async function handleGetBillingInvoice(request: Request, env: Env, path: string)
   await ensureBillingSchema(env);
   const id = path.split("/")[4];
   const inv = await env.DB.prepare(
-    `SELECT bi.*, c.name AS client_name, bp.label AS period_label FROM billing_invoices bi
+    `SELECT bi.*, c.name AS client_name, c.display_name AS client_display_name, bp.label AS period_label FROM billing_invoices bi
      LEFT JOIN clients c ON bi.client_id=c.id LEFT JOIN billing_periods bp ON bi.period_id=bp.id WHERE bi.id=?`
   ).bind(id).first() as Record<string, unknown> | null;
   if (!inv) return json({ error: "Invoice not found" }, 404);
@@ -13944,6 +13949,86 @@ async function handleAddDcsToTask(request: Request, env: Env, path: string): Pro
     .bind(billMoney(Number(tot.v)), user!.sub, id).run();
   await audit(env, user, "BILLING_TASK_ADD_DCS", "billing_invoice", id, undefined, `${valid.length} DCs`);
   return json({ ok: true, dc_count: tot.n, allocated_value: billMoney(Number(tot.v)) });
+}
+
+// GET /api/billing/my-tasks — the logged-in owner's billing tasks, bucketed and
+// sorted (overdue → due today → upcoming; completed last).
+async function handleMyBillingTasks(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const d = requireBilling(user); if (d) return d;
+  await ensureBillingSchema(env);
+  const today = new Date().toISOString().slice(0, 10);
+  const { results } = await env.DB.prepare(
+    `SELECT bi.*, c.name AS client_name, c.display_name AS client_display_name,
+       (SELECT COUNT(*) FROM billing_invoice_dcs x WHERE x.invoice_id=bi.id) AS dc_count,
+       (SELECT label FROM billing_cycles bc WHERE bc.id=bi.cycle_id) AS cycle_label
+     FROM billing_invoices bi LEFT JOIN clients c ON bi.client_id=c.id
+     WHERE bi.owner=? AND bi.status!='Cancelled' ORDER BY bi.created_at DESC`
+  ).bind(user!.sub).all();
+  const order = { overdue: 0, due_today: 1, upcoming: 2, completed: 3 };
+  const tasks = (results as Array<Record<string, unknown>>).map((t) => {
+    const recorded = String(t.status) === "Recorded";
+    const deadline = (recorded ? t.submission_target_date : t.invoice_target_date) as string | null;
+    const bucket = taskBucket(String(t.status), String(t.submission_status), deadline, today);
+    const overdueDays = deadline && bucket === "overdue" ? -daysUntil(String(deadline), today) : 0;
+    return {
+      id: t.id, client_name: t.client_name, client_display_name: t.client_display_name, category: t.category,
+      cycle_label: t.cycle_label, lifecycle: t.lifecycle, status: t.status, submission_status: t.submission_status,
+      next_action: taskNextAction(String(t.status), String(t.submission_status), t.lifecycle as string, Number(t.dc_count) || 0),
+      deadline, deadline_kind: recorded ? "submission" : "invoice", bucket, overdue_days: overdueDays,
+      dc_count: Number(t.dc_count) || 0, total_amount: t.total_amount, allocated_value: t.allocated_value, invoice_no: t.invoice_no,
+    };
+  }).sort((a, b) => (order[a.bucket] - order[b.bucket]) || String(a.deadline || "").localeCompare(String(b.deadline || "")));
+  const counts = { overdue: 0, due_today: 0, upcoming: 0, completed: 0 };
+  for (const t of tasks) counts[t.bucket]++;
+  return json({ tasks, counts });
+}
+
+// Reminder + escalation pass for billing tasks. Idempotent via billing_reminder_log.
+async function runBillingReminders(env: Env, todayISO?: string): Promise<{ sent: number }> {
+  await ensureBillingSchema(env);
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS billing_reminder_log (id TEXT PRIMARY KEY, invoice_id TEXT NOT NULL, kind TEXT NOT NULL, created_at TEXT DEFAULT (datetime('now')), UNIQUE (invoice_id, kind))").run().catch(() => {});
+  const today = todayISO || new Date().toISOString().slice(0, 10);
+  const { results } = await env.DB.prepare(
+    `SELECT bi.*, c.name AS client_name FROM billing_invoices bi LEFT JOIN clients c ON bi.client_id=c.id
+     WHERE bi.status!='Cancelled' AND bi.submission_status!='Submitted' AND bi.owner IS NOT NULL`
+  ).all();
+  let sent = 0;
+  const logged = async (inv: string, kind: string) => !!(await env.DB.prepare("SELECT 1 FROM billing_reminder_log WHERE invoice_id=? AND kind=?").bind(inv, kind).first());
+  const logIt = (inv: string, kind: string) => env.DB.prepare("INSERT OR IGNORE INTO billing_reminder_log (id,invoice_id,kind) VALUES (?,?,?)").bind(uid(), inv, kind).run();
+  for (const t of results as Array<Record<string, unknown>>) {
+    const label = `${t.client_name || ""}${t.category ? " · " + t.category : ""}`.trim();
+    // New-task notification (once per task that has an owner).
+    if (!(await logged(String(t.id), "assigned"))) {
+      await logIt(String(t.id), "assigned");
+      await pushNotification(env, null, `New billing task assigned: ${label}`, String(t.owner)).catch(() => {});
+    }
+    const recorded = String(t.status) === "Recorded";
+    const milestone = recorded ? "sub" : "prep";
+    const deadline = (recorded ? t.submission_target_date : t.invoice_target_date) as string | null;
+    if (!deadline) continue;
+    const dto = daysUntil(String(deadline), today);
+    const active = activeReminders(dto);
+    if (!active.length) continue;
+    const cur = active[active.length - 1];
+    const kindKey = `${milestone}-${cur.kind}`;
+    if (await logged(String(t.id), kindKey)) continue;
+    // Log all active stages for this milestone so a catch-up run doesn't burst later.
+    for (const s of active) await logIt(String(t.id), `${milestone}-${s.kind}`);
+    const what = milestone === "sub" ? "Submission" : "Invoice";
+    const msg = `${what} ${cur.label}: ${label}`;
+    if (cur.audience === "owner") { await pushNotification(env, null, msg, String(t.owner)).catch(() => {}); }
+    else if (cur.audience === "owner+manager") { await pushNotification(env, null, msg, String(t.owner)).catch(() => {}); await pushNotification(env, "finance_admin", `Escalation — ${msg}`, null).catch(() => {}); }
+    else { await pushNotification(env, "finance_admin", `Escalation — ${msg}`, null).catch(() => {}); await pushNotification(env, "super_admin", `Escalation — ${msg}`, null).catch(() => {}); }
+    sent++;
+  }
+  return { sent };
+}
+// POST /api/billing/run-reminders — manual trigger (super admin), mirrors the cron.
+async function handleRunBillingReminders(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const d = requireBilling(user); if (d) return d;
+  if (user!.role !== "super_admin") return json({ error: "Super admin only." }, 403);
+  const r = await runBillingReminders(env);
+  return json({ ok: true, ...r });
 }
 
 const BUDGET_EDIT_ROLES = ["client_admin", "our_admin", "ops_admin", "super_admin"]; // our_admin acts "on behalf"

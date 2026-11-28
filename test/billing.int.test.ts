@@ -13,7 +13,7 @@ const put = (p: string, b: unknown, t?: string) => SELF.fetch(`${BASE}${p}`, { m
 const get = (p: string, t?: string) => SELF.fetch(`${BASE}${p}`, { headers: hdr(t) });
 async function login(e: string, pw: string): Promise<string> { return (await (await post("/api/auth/login", { email: e, password: pw })).json() as { token: string }).token; }
 const db = () => env.DB as D1Database;
-let finTok: string, cuTok: string;
+let finTok: string, cuTok: string, saTok: string;
 const TODAY = new Date().toISOString().slice(0, 10);
 const MONTH = TODAY.slice(0, 7);
 
@@ -54,7 +54,8 @@ beforeAll(async () => {
 
   await d.prepare("INSERT OR IGNORE INTO users (id,email,password_hash,role,name,org,initials,active,client_id) VALUES ('u-fin','fin@sp.test','SEED:pw123','finance_admin','Meera','SP','M',1,NULL)").run();
   await d.prepare("INSERT OR IGNORE INTO users (id,email,password_hash,role,name,org,initials,active,client_id) VALUES ('u-cu','cu@sp.test','SEED:pw123','client_user','Sana','Chaayos','S',1,'cCh')").run();
-  finTok = await login("fin@sp.test", "pw123"); cuTok = await login("cu@sp.test", "pw123");
+  await d.prepare("INSERT OR IGNORE INTO users (id,email,password_hash,role,name,org,initials,active,client_id) VALUES ('u-sa','sa@sp.test','SEED:pw123','super_admin','Root','SP','R',1,NULL)").run();
+  finTok = await login("fin@sp.test", "pw123"); cuTok = await login("cu@sp.test", "pw123"); saTok = await login("sa@sp.test", "pw123");
 });
 
 async function currentPeriodId(): Promise<string> {
@@ -209,5 +210,33 @@ describe("rules + scheduler (phase 2)", () => {
     await post("/api/billing/rules", { client_id: "cCh", rule_name: "Qtr", frequency: "Quarterly", anchor_month: 1, primary_owner: "u-fin", effective_start: EFF }, finTok);
     const g = await (await post("/api/billing/generate", { client_id: "cCh" }, finTok)).json() as any;
     expect(g.cyclesCreated).toBeGreaterThan(3); // several weeks + a quarter
+  });
+});
+
+describe("my tasks + reminders (phase 2)", () => {
+  async function seedRule(extra = {}) {
+    const EFF = new Date(Date.now() - 75 * 86400000).toISOString().slice(0, 10);
+    await post("/api/billing/rules", { client_id: "cCh", rule_name: "Monthly", frequency: "Monthly", primary_owner: "u-fin", effective_start: EFF, ...extra }, finTok);
+    await post("/api/billing/generate", { client_id: "cCh" }, finTok);
+  }
+  it("my-tasks returns the owner's tasks, bucketed with a next action", async () => {
+    await seedRule();
+    const r = await (await get("/api/billing/my-tasks", finTok)).json() as any;
+    expect(r.tasks.length).toBeGreaterThan(0);
+    const cur = r.tasks.find((t: any) => t.lifecycle === "To Be Billed");
+    expect(cur).toBeTruthy();
+    expect(cur.next_action).toBe("Select DCs");
+    expect(r.counts).toHaveProperty("overdue");
+    // an owner with no tasks sees an empty list
+    const none = await (await get("/api/billing/my-tasks", saTok)).json() as any;
+    expect(none.tasks.length).toBe(0);
+  });
+  it("reminders fire once (deduped), escalate overdue tasks, and are super-admin-only", async () => {
+    await seedRule();
+    expect((await post("/api/billing/run-reminders", {}, finTok)).status).toBe(403);
+    const r1 = await (await post("/api/billing/run-reminders", {}, saTok)).json() as any;
+    expect(r1.sent).toBeGreaterThan(0);           // overdue old-cycle tasks escalate
+    const r2 = await (await post("/api/billing/run-reminders", {}, saTok)).json() as any;
+    expect(r2.sent).toBe(0);                       // deduped on the second pass
   });
 });
