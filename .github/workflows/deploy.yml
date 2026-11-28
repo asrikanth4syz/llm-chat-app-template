@@ -59,6 +59,17 @@ jobs:
           sed -i -E "s/\?v=[A-Za-z0-9._-]+/?v=$v/g" public/index.html
           echo "Stamped assets with ?v=$v"
           grep -oE 'app\.css\?v=[A-Za-z0-9._-]+' public/index.html | head -1
+          # Stamp the live build identity so the deployed Worker is self-identifying.
+          # Served at /version.json; values are git/CI metadata only (no free text),
+          # so the JSON is always well-formed. Verify prod with:
+          #   curl -s https://llm-chat-app-template.asrikanth.workers.dev/version.json
+          printf '{"sha":"%s","short_sha":"%s","ref":"%s","run":"%s","built_at":"%s"}\n' \
+            "$GITHUB_SHA" "$v" "$GITHUB_REF_NAME" "$GITHUB_RUN_NUMBER" "$(date -u +%FT%TZ)" > public/version.json
+          echo "Build identity → $(cat public/version.json)"
+
+      - name: Map this deploy to its commit (for wrangler deployments list)
+        run: |
+          echo "::notice title=Deploy identity::commit ${GITHUB_SHA::12} (run #${GITHUB_RUN_NUMBER}) — $(git log -1 --pretty=%s)"
 
       - name: Deploy to Cloudflare Workers
         uses: cloudflare/wrangler-action@v3
