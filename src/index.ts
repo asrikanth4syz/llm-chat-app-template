@@ -7355,6 +7355,7 @@ export default {
       if (path==="/api/billing/overview"                         && method==="GET")  return handleBillingOverview(request,env);
       if (path==="/api/billing/invoices"                         && method==="GET")  return handleListBillingInvoices(request,env);
       if (path==="/api/billing/invoices"                         && method==="POST") return handleCreateBillingInvoice(request,env,path);
+      if (path.match(/^\/api\/billing\/invoices\/[^/]+\/history$/)&& method==="GET")  return handleBillingInvoiceHistory(request,env,path);
       if (path.match(/^\/api\/billing\/invoices\/[^/]+$/)        && method==="GET")  return handleGetBillingInvoice(request,env,path);
       if (path.match(/^\/api\/billing\/invoices\/[^/]+\/record$/)&& method==="POST") return handleRecordBillingInvoice(request,env,path);
       if (path.match(/^\/api\/billing\/invoices\/[^/]+\/submission$/)&& method==="POST") return handleBillingSubmission(request,env,path);
@@ -13644,12 +13645,28 @@ async function handleListBillingInvoices(request: Request, env: Env): Promise<Re
   if (q.get("owner")) { where.push("bi.owner=?"); vals.push(q.get("owner")); }
   if (q.get("period_id")) { where.push("bi.period_id=?"); vals.push(q.get("period_id")); }
   const { results } = await env.DB.prepare(
-    `SELECT bi.*, c.name AS client_name, c.display_name AS client_display_name, bp.label AS period_label,
+    `SELECT bi.*, c.name AS client_name, c.display_name AS client_display_name,
+            COALESCE(bp.label, bc.label) AS period_label, r.frequency AS frequency, r.rule_name AS rule_name,
             (SELECT COUNT(*) FROM billing_invoice_dcs x WHERE x.invoice_id=bi.id) AS dc_count
-     FROM billing_invoices bi LEFT JOIN clients c ON bi.client_id=c.id LEFT JOIN billing_periods bp ON bi.period_id=bp.id
-     WHERE ${where.join(" AND ")} ORDER BY bi.created_at DESC LIMIT 300`
+     FROM billing_invoices bi LEFT JOIN clients c ON bi.client_id=c.id
+       LEFT JOIN billing_periods bp ON bi.period_id=bp.id
+       LEFT JOIN billing_cycles bc ON bi.cycle_id=bc.id
+       LEFT JOIN billing_rules r ON bi.rule_id=r.id
+     WHERE ${where.join(" AND ")} ORDER BY bi.created_at DESC LIMIT 500`
   ).bind(...vals).all();
   return json({ invoices: results });
+}
+
+// GET /api/billing/invoices/:id/history — audit trail for one task (drawer History tab).
+async function handleBillingInvoiceHistory(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const d = requireBilling(user); if (d) return d;
+  await ensureBillingSchema(env);
+  const id = path.split("/")[4];
+  const { results } = await env.DB.prepare(
+    `SELECT action, actor_name, old_value, new_value, created_at FROM audit_logs
+     WHERE entity_type='billing_invoice' AND entity_id=? ORDER BY created_at DESC LIMIT 100`
+  ).bind(id).all();
+  return json({ history: results });
 }
 
 // GET /api/billing/invoices/:id — detail with DC allocations.

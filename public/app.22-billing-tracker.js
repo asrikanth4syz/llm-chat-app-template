@@ -4,8 +4,30 @@
 
 const BT_FREQ = ['Monthly', 'Fortnightly', 'Weekly'];
 
+function btInjectCss() {
+  if (APP._bt && APP._bt._css) return; if (APP._bt) APP._bt._css = true;
+  const s = document.createElement('style');
+  s.textContent = `
+  .btdrawer-scrim{position:fixed;inset:0;background:rgba(10,16,30,.45);opacity:0;pointer-events:none;transition:opacity .15s;z-index:1200}
+  .btdrawer-scrim.on{opacity:1;pointer-events:auto}
+  .btdrawer{position:fixed;top:0;right:0;bottom:0;width:min(560px,100%);background:var(--surface);border-left:1px solid var(--border);transform:translateX(100%);transition:transform .18s;z-index:1201;display:flex;flex-direction:column;box-shadow:-8px 0 28px rgba(0,0,0,.18)}
+  .btdrawer.on{transform:none}
+  .btdrawer .hd{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+  .btdrawer .tabs2{display:flex;gap:4px;padding:8px 12px;border-bottom:1px solid var(--border);overflow-x:auto}
+  .btdrawer .tabs2 button{border:0;background:none;padding:7px 11px;border-radius:7px;font-size:.82rem;font-weight:600;color:var(--text-muted);cursor:pointer;white-space:nowrap}
+  .btdrawer .tabs2 button.on{background:var(--navy);color:#fff}
+  .btdrawer .in{padding:16px;overflow:auto;flex:1}
+  .btreg th{position:sticky;top:0;background:var(--surface);z-index:1;cursor:pointer;white-space:nowrap;user-select:none}
+  .btreg th .ar{font-size:.6rem;color:var(--text-muted)}
+  .btreg td{white-space:nowrap}
+  .btreg tbody tr:hover{background:var(--bg,var(--surface-2))}
+  @media (max-width:560px){ .btdrawer{width:100%} }
+  `;
+  document.head.appendChild(s);
+}
 async function renderBillingTracker(el) {
   APP._bt = APP._bt || { tab: 'overview', clientId: '', periodId: '', sel: {} };
+  btInjectCss();
   APP._bt.el = el;
   el.innerHTML = `<div class="u-muted" style="padding:16px">Loading…</div>`;
   if (!APP._bt.clients) {
@@ -255,62 +277,220 @@ function btStatusBadge(s) {
   const map = { Draft: 'var(--text-muted)', Recorded: 'var(--success)', Cancelled: 'var(--danger)' };
   return `<span class="badge" style="background:var(--bg);border:1px solid var(--border);color:${map[s] || 'var(--text-muted)'}">${h(s)}</span>`;
 }
+// ── Excel-style invoice register (FR-004) ─────────────────────────────────────
+const BT_FREQ_LABEL2 = { Weekly: 'Weekly', Fortnightly: 'Twice monthly', Monthly: 'Monthly', TwoMonthly: 'Every two months', Quarterly: 'Quarterly', AdHoc: 'Ad hoc' };
+function btStageOf(i) { return i.exception || i.lifecycle || (i.status === 'Recorded' ? 'Invoice Generated' : 'Under Preparation'); }
+// Column registry. def=shown by default; opt columns are toggled via the selector.
+function btRegColumns() {
+  const td = s => s ? fmtDate(s) : '—';
+  return [
+    { key: 'owner', label: 'Owner', def: 1, get: i => h(i.owner_name || '—'), val: i => i.owner_name || '' },
+    { key: 'client', label: 'Company', def: 1, get: i => `<b>${clientLabel(i.client_name, i.client_display_name)}</b>`, val: i => i.client_name || '' },
+    { key: 'category', label: 'Category', def: 1, get: i => i.category ? h(i.category) : '<span class="u-muted">All</span>', val: i => i.category || '' },
+    { key: 'frequency', label: 'Frequency', def: 1, get: i => h(BT_FREQ_LABEL2[i.frequency] || i.frequency || '—'), val: i => i.frequency || '' },
+    { key: 'period', label: 'Period', def: 1, get: i => h(i.period_label || '—'), val: i => i.period_label || '' },
+    { key: 'stage', label: 'Stage', def: 1, get: i => `<span class="badge" style="background:var(--bg);border:1px solid var(--border);font-size:.66rem;color:${i.exception ? 'var(--danger)' : 'var(--text-muted)'}">${h(btStageOf(i))}</span>`, val: i => btStageOf(i) },
+    { key: 'dc_count', label: 'DCs', def: 1, right: 1, get: i => String(i.dc_count || 0), val: i => Number(i.dc_count || 0) },
+    { key: 'invoice_no', label: 'Invoice No.', def: 1, get: i => i.invoice_no ? `<b>${h(i.invoice_no)}</b>` : '<span class="u-muted">—</span>', val: i => i.invoice_no || '' },
+    { key: 'invoice_date', label: 'Invoice date', def: 1, get: i => td(i.invoice_date), val: i => i.invoice_date || '' },
+    { key: 'estimated', label: 'Estimated', def: 0, right: 1, get: i => fmt(i.allocated_value), val: i => Number(i.allocated_value || 0) },
+    { key: 'actual', label: 'Actual (incl tax)', def: 1, right: 1, get: i => i.total_amount != null ? fmt(i.total_amount) : '—', val: i => Number(i.total_amount || 0) },
+    { key: 'po', label: 'PO', def: 0, get: i => h(i.po_number || '—'), val: i => i.po_number || '' },
+    { key: 'prep_target', label: 'Prep target', def: 0, get: i => td(i.invoice_target_date), val: i => i.invoice_target_date || '' },
+    { key: 'sub_target', label: 'Submission target', def: 1, get: i => td(i.submission_target_date), val: i => i.submission_target_date || '' },
+    { key: 'submission', label: 'Submission', def: 1, get: i => i.status === 'Recorded' ? btSubBadge(i.submission_status) : '—', val: i => i.submission_status || '' },
+    { key: 'submitted_date', label: 'Submitted', def: 1, get: i => td(i.submitted_date), val: i => i.submitted_date || '' },
+    { key: 'overdue_days', label: 'Overdue', def: 0, right: 1, get: i => { const od = btOverdueDays(i); return od > 0 ? `<span style="color:var(--danger);font-weight:700">${od}d</span>` : '—'; }, val: i => btOverdueDays(i) },
+    { key: 'remarks', label: 'Remarks', def: 0, get: i => h(i.remarks || '—'), val: i => i.remarks || '' },
+    { key: 'updated', label: 'Last updated', def: 0, get: i => td((i.updated_at || i.created_at || '').slice(0, 10)), val: i => i.updated_at || i.created_at || '' },
+    { key: 'status', label: 'Status', def: 1, get: i => btStatusBadge(i.status), val: i => i.status || '' },
+  ];
+}
+function btOverdueDays(i) {
+  if (i.status !== 'Recorded' || i.submission_status === 'Submitted' || !i.submission_target_date) return 0;
+  const t = new Date().toISOString().slice(0, 10);
+  return i.submission_target_date < t ? Math.round((Date.parse(t) - Date.parse(i.submission_target_date)) / 86400000) : 0;
+}
+function btVisibleCols() {
+  const cols = btRegColumns();
+  let stored = null;
+  try { stored = JSON.parse(localStorage.getItem('bt.reg.visible') || 'null'); } catch (e) {}
+  if (!stored || !Array.isArray(stored)) return cols.filter(c => c.def);
+  return cols.filter(c => stored.includes(c.key));
+}
+function btRegState() { APP._bt.reg = APP._bt.reg || { q: '', status: '', owner: '', freq: '', sort: { key: 'invoice_date', dir: 'desc' }, page: 0 }; return APP._bt.reg; }
+
 async function btInvoices(body) {
-  const r = await api('/billing/invoices');
-  if (!r) return;
-  const today = new Date().toISOString().slice(0, 10);
-  const inv = r.invoices || [];
-  body.innerHTML = `
-    <div class="card"><div class="card-header"><span>Invoice register (${inv.length})</span></div>
-    <div class="table-wrap"><table class="table">
-      <thead><tr><th>Owner</th><th>Client / category</th><th>Stage</th><th>Invoice No.</th><th>Date</th><th class="u-right">Amount</th><th>Submission</th><th>Target</th><th>Status</th><th></th></tr></thead>
-      <tbody>${inv.map(i => {
-        const overdue = i.status === 'Recorded' && i.submission_status !== 'Submitted' && i.submission_target_date && i.submission_target_date < today;
-        const stage = i.exception || i.lifecycle || (i.status === 'Recorded' ? 'Invoice Generated' : 'Under Preparation');
-        return `<tr>
-          <td>${h(i.owner_name || '—')}</td>
-          <td><b>${clientLabel(i.client_name, i.client_display_name)}</b>${i.category ? ` <span class="badge" style="font-size:.6rem;background:var(--bg);border:1px solid var(--border)">${h(i.category)}</span>` : ''}${i.period_label ? `<div class="u-subtiny">${h(i.period_label)}</div>` : ''}</td>
-          <td><span class="badge" style="background:var(--bg);border:1px solid var(--border);font-size:.66rem;color:${i.exception ? 'var(--danger)' : 'var(--text-muted)'}">${h(stage)}</span></td>
-          <td>${i.invoice_no ? `<b>${h(i.invoice_no)}</b>` : '<span class="u-muted">Not yet invoiced</span>'}</td>
-          <td>${i.invoice_date ? fmtDate(i.invoice_date) : '—'}</td>
-          <td class="u-right" style="font-variant-numeric:tabular-nums">${i.total_amount != null ? fmt(i.total_amount) : fmt(i.allocated_value)}</td>
-          <td>${i.status === 'Recorded' ? btSubBadge(i.submission_status) : '—'}${overdue ? ' <span class="badge badge-danger" style="font-size:.6rem">overdue</span>' : ''}</td>
-          <td>${i.submission_target_date ? fmtDate(i.submission_target_date) : '—'}</td>
-          <td>${btStatusBadge(i.status)}</td>
-          <td><button class="btn btn-sm btn-secondary" ${dataAct('btOpen', i.id)}>Open</button></td>
-        </tr>`;
-      }).join('') || '<tr><td colspan="10" class="u-empty">No invoices yet — create one under To Be Billed.</td></tr>'}
-      </tbody></table></div></div>`;
+  const r = await api('/billing/invoices'); if (!r) return;
+  APP._bt._inv = r.invoices || [];
+  btRegRender(body);
   if (APP._bt.openId) { const id = APP._bt.openId; APP._bt.openId = null; btOpen(id); }
 }
+function btRegRender(body) {
+  body = body || document.getElementById('bt-body'); if (!body) return;
+  const s = btRegState();
+  const owners = [...new Set((APP._bt._inv || []).map(i => i.owner_name).filter(Boolean))].sort();
+  // filter
+  let rows = (APP._bt._inv || []).filter(i => {
+    if (s.status && i.status !== s.status) return false;
+    if (s.owner && i.owner_name !== s.owner) return false;
+    if (s.freq && i.frequency !== s.freq) return false;
+    if (s.q) { const q = s.q.toLowerCase(); const hay = [i.client_name, i.client_display_name, i.invoice_no, i.po_number, i.owner_name, i.category].map(x => (x || '').toLowerCase()).join(' '); if (!hay.includes(q)) return false; }
+    return true;
+  });
+  // sort
+  const cols = btRegColumns(); const col = cols.find(c => c.key === s.sort.key) || cols[0];
+  rows.sort((a, b) => { const av = col.val(a), bv = col.val(b); const r2 = (av < bv ? -1 : av > bv ? 1 : 0); return s.sort.dir === 'asc' ? r2 : -r2; });
+  const est = rows.reduce((t, i) => t + Number(i.allocated_value || 0), 0);
+  const act = rows.reduce((t, i) => t + Number(i.total_amount || 0), 0);
+  const PAGE = 50; const total = rows.length; const pages = Math.max(1, Math.ceil(total / PAGE));
+  if (s.page >= pages) s.page = pages - 1;
+  const pageRows = rows.slice(s.page * PAGE, s.page * PAGE + PAGE);
+  const vis = btVisibleCols();
+  const th = c => `<th class="${c.right ? 'u-right' : ''}" ${dataAct('btRegSort', c.key)}>${h(c.label)}${s.sort.key === c.key ? ` <span class="ar">${s.sort.dir === 'asc' ? '▲' : '▼'}</span>` : ''}</th>`;
+  body.innerHTML = `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+      <input type="text" id="reg-q" value="${h(s.q)}" placeholder="Search client, invoice, PO, owner…" style="flex:1;min-width:200px;padding:8px 11px;border:1px solid var(--border);border-radius:8px">
+      <select id="reg-status" style="padding:8px;border:1px solid var(--border);border-radius:8px"><option value="">All statuses</option>${['Draft', 'Recorded', 'Cancelled'].map(x => `<option ${s.status === x ? 'selected' : ''}>${x}</option>`).join('')}</select>
+      <select id="reg-owner" style="padding:8px;border:1px solid var(--border);border-radius:8px"><option value="">All owners</option>${owners.map(o => `<option ${s.owner === o ? 'selected' : ''}>${h(o)}</option>`).join('')}</select>
+      <select id="reg-freq" style="padding:8px;border:1px solid var(--border);border-radius:8px"><option value="">All frequencies</option>${Object.keys(BT_FREQ_LABEL2).map(f => `<option value="${f}" ${s.freq === f ? 'selected' : ''}>${BT_FREQ_LABEL2[f]}</option>`).join('')}</select>
+      <button class="btn btn-secondary btn-sm" ${dataAct('btRegColsModal')}>⚙ Columns</button>
+      <button class="btn btn-secondary btn-sm" ${dataAct('btExportCsv')}>⬇ CSV</button>
+    </div>
+    <div class="card" style="padding:0"><div class="table-wrap" style="max-height:62vh;overflow:auto"><table class="table btreg">
+      <thead><tr>${vis.map(th).join('')}</tr></thead>
+      <tbody>${pageRows.map(i => `<tr ${dataAct('btOpen', i.id)} style="cursor:pointer">${vis.map(c => `<td class="${c.right ? 'u-right' : ''}" style="${c.right ? 'font-variant-numeric:tabular-nums' : ''}">${c.get(i)}</td>`).join('')}</tr>`).join('')
+      || `<tr><td colspan="${vis.length}" class="u-empty">No invoices match. Create one under To Be Billed.</td></tr>`}</tbody>
+    </table></div></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;flex-wrap:wrap;gap:8px">
+      <span class="u-muted" style="font-size:.82rem">${total} task${total === 1 ? '' : 's'} · Estimated <b>${fmt(est)}</b> · Actual <b>${fmt(act)}</b></span>
+      ${pages > 1 ? `<span style="display:flex;gap:6px;align-items:center"><button class="btn btn-sm btn-secondary" ${dataAct('btRegPage', -1)} ${s.page === 0 ? 'disabled' : ''}>‹ Prev</button><span class="u-muted" style="font-size:.8rem">Page ${s.page + 1} / ${pages}</span><button class="btn btn-sm btn-secondary" ${dataAct('btRegPage', 1)} ${s.page >= pages - 1 ? 'disabled' : ''}>Next ›</button></span>` : ''}
+    </div>`;
+  const bind = (id, k) => { const e = document.getElementById(id); if (e) e.onchange = () => { s[k] = e.value; s.page = 0; btRegRender(); }; };
+  const q = document.getElementById('reg-q'); if (q) q.oninput = () => { s.q = q.value; s.page = 0; clearTimeout(APP._bt._qt); APP._bt._qt = setTimeout(() => btRegRender(), 200); };
+  bind('reg-status', 'status'); bind('reg-owner', 'owner'); bind('reg-freq', 'freq');
+}
+function btRegSort(key) { const s = btRegState(); if (s.sort.key === key) s.sort.dir = s.sort.dir === 'asc' ? 'desc' : 'asc'; else s.sort = { key, dir: 'asc' }; btRegRender(); }
+function btRegPage(delta) { const s = btRegState(); s.page = Math.max(0, s.page + delta); btRegRender(); }
+function btRegColsModal() {
+  const vis = new Set(btVisibleCols().map(c => c.key));
+  openModal('Choose columns',
+    `<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">${btRegColumns().map(c => `<label style="font-size:.84rem;font-weight:400"><input type="checkbox" data-col="${c.key}" ${vis.has(c.key) ? 'checked' : ''}> ${h(c.label)}</label>`).join('')}</div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button><button class="btn btn-primary" ${dataAct('btRegColsSave')}>Apply</button>`);
+}
+function btRegColsSave() {
+  const visible = [...document.querySelectorAll('[data-col]')].filter(cb => cb.checked).map(cb => cb.dataset.col);
+  try { localStorage.setItem('bt.reg.visible', JSON.stringify(visible)); } catch (e) {}
+  closeModal(); btRegRender();
+}
+function btExportCsv() {
+  const vis = btVisibleCols();
+  const s = btRegState();
+  const rows = (APP._bt._inv || []).filter(i => {
+    if (s.status && i.status !== s.status) return false;
+    if (s.owner && i.owner_name !== s.owner) return false;
+    if (s.freq && i.frequency !== s.freq) return false;
+    if (s.q) { const q = s.q.toLowerCase(); const hay = [i.client_name, i.invoice_no, i.po_number, i.owner_name, i.category].map(x => (x || '').toLowerCase()).join(' '); if (!hay.includes(q)) return false; }
+    return true;
+  });
+  const esc = v => { const str = String(v == null ? '' : v); return /[",\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str; };
+  const header = vis.map(c => c.label);
+  const lines = [header.map(esc).join(',')];
+  for (const i of rows) lines.push(vis.map(c => esc(typeof c.val === 'function' ? c.val(i) : '')).join(','));
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `billing-register-${new Date().toISOString().slice(0, 10)}.csv`; a.click(); URL.revokeObjectURL(a.href);
+  showToast(`Exported ${rows.length} row${rows.length === 1 ? '' : 's'}.`);
+}
 
-async function btOpen(id) {
-  const inv = await api(`/billing/invoices/${id}`);
+// ── Detail workspace drawer (FR-005) ──────────────────────────────────────────
+function btDrawerEl() {
+  let scrim = document.getElementById('bt-scrim');
+  if (!scrim) {
+    scrim = document.createElement('div'); scrim.id = 'bt-scrim'; scrim.className = 'btdrawer-scrim';
+    scrim.onclick = btDrawerClose;
+    const panel = document.createElement('div'); panel.id = 'bt-drawer'; panel.className = 'btdrawer';
+    panel.onclick = e => e.stopPropagation();
+    scrim.appendChild(panel); document.body.appendChild(scrim);
+  }
+  return document.getElementById('bt-drawer');
+}
+function btDrawerClose() { const s = document.getElementById('bt-scrim'); if (s) { s.classList.remove('on'); s.querySelector('.btdrawer')?.classList.remove('on'); } APP._bt.drawer = null; }
+async function btOpen(id, tab) {
+  const [inv, hist] = await Promise.all([api(`/billing/invoices/${id}`), api(`/billing/invoices/${id}/history`).catch(() => ({ history: [] }))]);
   if (!inv) return;
-  const dcs = inv.dcs || [];
-  const dcList = dcs.map(d => `<tr><td><b>${h(d.dc_number || d.dc_id)}</b></td><td class="u-right">${fmt(d.dc_value)}</td></tr>`).join('');
-  const isDraft = inv.status === 'Draft', isRec = inv.status === 'Recorded';
-  const reqChips = [inv.req_email && 'Email', inv.req_portal && 'Portal', inv.req_hardcopy && 'Hard copy'].filter(Boolean).join(' · ') || 'None required';
-  const body = `
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">${btStatusBadge(inv.status)} ${isRec ? btSubBadge(inv.submission_status) : ''}
-      <span class="u-muted" style="font-size:.82rem">${clientLabel(inv.client_name, inv.client_display_name)}${inv.period_label ? ' · ' + h(inv.period_label) : ''}</span></div>
-    <div class="card" style="margin-bottom:10px"><div class="card-header"><span>Delivery challans (${dcs.length})</span><span class="u-muted" style="font-size:.82rem">Allocated ${fmt(inv.allocated_value)}</span></div>
-      <div class="table-wrap"><table class="table"><thead><tr><th>DC #</th><th class="u-right">Value</th></tr></thead><tbody>${dcList || '<tr><td colspan="2" class="u-empty">None</td></tr>'}</tbody></table></div></div>
-    ${isRec ? `<div class="card" style="margin-bottom:10px;font-size:.86rem"><b>Invoice ${h(inv.invoice_no)}</b> · ${fmtDate(inv.invoice_date)} · Taxable ${fmt(inv.taxable_amount)} + GST ${fmt(inv.gst_amount)} = <b>${fmt(inv.total_amount)}</b>${Math.abs(Number(inv.total_amount || 0) - Number(inv.allocated_value || 0)) > 0.5 ? `<div style="color:var(--danger);font-size:.78rem;margin-top:3px">⚠ Differs from allocated DC value (${fmt(inv.allocated_value)}) by ${fmt(Math.abs(Number(inv.total_amount) - Number(inv.allocated_value)))}</div>` : ''}</div>` : ''}
-    ${isRec ? `<div class="card"><div class="card-header"><span>Submission</span><span class="u-muted" style="font-size:.78rem">Required: ${reqChips}</span></div>
+  APP._bt.drawer = { inv, history: (hist && hist.history) || [], tab: tab || (APP._bt.drawer && APP._bt.drawer.inv && APP._bt.drawer.inv.id === id ? APP._bt.drawer.tab : 'details') };
+  btDrawerRender();
+  const s = document.getElementById('bt-scrim'); requestAnimationFrame(() => { s.classList.add('on'); document.getElementById('bt-drawer').classList.add('on'); });
+}
+async function btDrawerReload() { if (APP._bt.drawer) await btOpen(APP._bt.drawer.inv.id, APP._bt.drawer.tab); if (APP._bt.tab === 'invoices') btInvoices(document.getElementById('bt-body')); }
+function btDrawerRender() {
+  const d = APP._bt.drawer; if (!d) return;
+  const i = d.inv; const el = btDrawerEl();
+  const TABS = [['details', 'Details'], ['dcs', `DCs (${(i.dcs || []).length})`], ['invoice', 'Invoice'], ['submission', 'Submission'], ['history', 'History']];
+  el.innerHTML = `
+    <div class="hd">
+      <div><div style="font-weight:800;color:var(--navy);font-size:1rem">${i.invoice_no ? h(i.invoice_no) : 'Draft invoice'}</div>
+        <div class="u-muted" style="font-size:.82rem">${clientLabel(i.client_name, i.client_display_name)}${i.category ? ' · ' + h(i.category) : ''}</div></div>
+      <button class="btn btn-sm btn-secondary" ${dataAct('btDrawerClose')}>✕</button></div>
+    <div style="padding:8px 16px 0;display:flex;gap:8px;flex-wrap:wrap;align-items:center">${btStatusBadge(i.status)} ${i.status === 'Recorded' ? btSubBadge(i.submission_status) : ''}
+      <span class="u-muted" style="font-size:.76rem;margin-left:auto">${(i.dcs || []).length} DC${(i.dcs || []).length === 1 ? '' : 's'} · est ${fmt(i.allocated_value)}${i.total_amount != null ? ' · actual ' + fmt(i.total_amount) : ''}</span></div>
+    <div class="tabs2">${TABS.map(([k, l]) => `<button class="${d.tab === k ? 'on' : ''}" ${dataAct('btDrawerTab', k)}>${l}</button>`).join('')}</div>
+    <div class="in" id="bt-drawer-in">${btDrawerTabHtml()}</div>`;
+}
+function btDrawerTab(tab) { APP._bt.drawer.tab = tab; btDrawerRender(); }
+function btDrawerTabHtml() {
+  const i = APP._bt.drawer.inv, tab = APP._bt.drawer.tab;
+  const isDraft = i.status === 'Draft', isRec = i.status === 'Recorded';
+  const kv = (k, v) => `<div style="display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px solid var(--border)"><span class="u-muted" style="font-size:.82rem">${k}</span><span style="font-size:.84rem;text-align:right">${v}</span></div>`;
+  if (tab === 'details') return `
+    ${kv('Company', clientLabel(i.client_name, i.client_display_name))}
+    ${kv('Category', i.category ? h(i.category) : 'All')}
+    ${kv('Period', h(i.period_label || '—'))}
+    ${kv('Owner', h(i.owner_name || '—'))}
+    ${kv('Stage', h(btStageOf(i)))}
+    ${kv('Invoice target', i.invoice_target_date ? fmtDate(i.invoice_target_date) : '—')}
+    ${kv('Submission target', i.submission_target_date ? fmtDate(i.submission_target_date) : '—')}
+    ${kv('PO', h(i.po_number || '—'))}
+    ${kv('Remarks', h(i.remarks || '—'))}`;
+  if (tab === 'dcs') {
+    const dcs = i.dcs || [];
+    return `<div class="table-wrap"><table class="table"><thead><tr><th>DC #</th><th class="u-right">Value</th></tr></thead>
+      <tbody>${dcs.map(x => `<tr><td><b>${h(x.dc_number || x.dc_id)}</b></td><td class="u-right">${fmt(x.dc_value)}</td></tr>`).join('') || '<tr><td colspan="2" class="u-empty">No DCs yet</td></tr>'}</tbody>
+      <tfoot><tr><td><b>Total</b></td><td class="u-right"><b>${fmt(i.allocated_value)}</b></td></tr></tfoot></table></div>
+      ${isDraft ? `<div style="margin-top:10px;display:flex;gap:8px"><button class="btn btn-sm btn-secondary" ${dataAct('btAddDcsForm', i.id, i.client_id)}>＋ Add DCs</button></div>` : ''}`;
+  }
+  if (tab === 'invoice') {
+    if (isRec) return `<div style="font-size:.9rem;line-height:1.9">
+      ${kv('Invoice number', '<b>' + h(i.invoice_no) + '</b>')}${kv('Invoice date', fmtDate(i.invoice_date))}
+      ${kv('Taxable', fmt(i.taxable_amount))}${kv('GST', fmt(i.gst_amount))}${kv('Total (incl tax)', '<b>' + fmt(i.total_amount) + '</b>')}
+      ${Math.abs(Number(i.total_amount || 0) - Number(i.allocated_value || 0)) > 0.5 ? `<div style="color:var(--danger);font-size:.8rem;margin-top:6px">⚠ Differs from allocated DC value (${fmt(i.allocated_value)}) by ${fmt(Math.abs(Number(i.total_amount) - Number(i.allocated_value)))}</div>` : ''}</div>`;
+    return `<p class="u-muted" style="font-size:.85rem">Enter the actual invoice from your accounting system. This marks the ${(i.dcs || []).length} DC${(i.dcs || []).length === 1 ? '' : 's'} as billed.</p>
+      <div class="form-group"><label>Invoice number <span style="color:var(--danger)">*</span></label><input type="text" id="ri-no" placeholder="e.g. INV-2026-0142"></div>
+      <div class="form-group"><label>Invoice date <span style="color:var(--danger)">*</span></label><input type="date" id="ri-date" value="${new Date().toISOString().slice(0, 10)}"></div>
+      <div style="display:flex;gap:10px"><div class="form-group" style="flex:1"><label>Taxable</label><input type="number" id="ri-tax" step="0.01" oninput="btRecalc()"></div>
+        <div class="form-group" style="flex:1"><label>GST</label><input type="number" id="ri-gst" step="0.01" oninput="btRecalc()"></div></div>
+      <div class="form-group"><label>Amount with tax <span style="color:var(--danger)">*</span></label><input type="number" id="ri-total" step="0.01"></div>
+      <div style="display:flex;gap:8px"><button class="btn btn-primary" ${dataAct('btRecordSubmit', i.id)} ${(i.dcs || []).length ? '' : 'disabled title="Add a DC first"'}>Record invoice</button>
+        <button class="btn btn-secondary" ${dataAct('btCancelInvoice', i.id)}>Cancel draft</button></div>`;
+  }
+  if (tab === 'submission') {
+    if (!isRec) return `<p class="u-muted" style="font-size:.85rem">Submission opens once the invoice is recorded.</p>`;
+    const req = [i.req_email && 'Email', i.req_portal && 'Portal', i.req_hardcopy && 'Hard copy'].filter(Boolean).join(' · ') || 'None required';
+    return `<div class="u-muted" style="font-size:.78rem;margin-bottom:8px">Required: ${req}</div>
       <div style="display:grid;gap:8px">
-        ${inv.req_email ? btDateRow('se-email', 'Email sent', inv.email_date) : ''}
-        ${inv.req_portal ? btDateRow('se-portal', 'Portal uploaded', inv.portal_date) : ''}
-        ${inv.req_hardcopy ? btDateRow('se-hard', 'Hard copy delivered', inv.hardcopy_date) : ''}
-        ${!inv.req_email && !inv.req_portal && !inv.req_hardcopy ? btDateRow('se-sub', 'Submitted on', inv.submitted_date) : ''}
-        <div><label style="font-size:.72rem;font-weight:700;color:var(--text-muted)">Remarks</label><input type="text" id="se-remarks" value="${h(inv.remarks || '')}" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:7px"></div>
-      </div></div>` : ''}`;
-  const footer = isDraft
-    ? `<button class="btn btn-secondary" ${dataAct('btCancelInvoice', id)}>Cancel draft</button><button class="btn btn-secondary" ${dataAct('btAddDcsForm', id, inv.client_id)}>＋ Add DCs</button><button class="btn btn-primary" ${dataAct('btRecordForm', id)} ${dcs.length ? '' : 'disabled title="Add at least one DC first"'}>Record invoice →</button>`
-    : isRec
-      ? `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button><button class="btn btn-primary" ${dataAct('btSubmissionSave', id)}>Save submission</button>`
-      : `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`;
-  openModal(isDraft ? 'Draft invoice' : `Invoice ${inv.invoice_no || ''}`, body, footer);
+        ${i.req_email ? btDateRow('se-email', 'Email sent', i.email_date) : ''}
+        ${i.req_portal ? btDateRow('se-portal', 'Portal uploaded', i.portal_date) : ''}
+        ${i.req_hardcopy ? btDateRow('se-hard', 'Hard copy delivered', i.hardcopy_date) : ''}
+        ${!i.req_email && !i.req_portal && !i.req_hardcopy ? btDateRow('se-sub', 'Submitted on', i.submitted_date) : ''}
+        <div><label style="font-size:.72rem;font-weight:700;color:var(--text-muted)">Remarks</label><input type="text" id="se-remarks" value="${h(i.remarks || '')}" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:7px"></div>
+        <button class="btn btn-primary" ${dataAct('btSubmissionSave', i.id)}>Save submission</button>
+      </div>`;
+  }
+  // history
+  const hs = APP._bt.drawer.history || [];
+  return `<div style="display:grid;gap:8px">${hs.map(e => `<div style="border-left:2px solid var(--border);padding:2px 0 6px 10px">
+    <div style="font-size:.82rem;font-weight:600">${h((e.action || '').replace(/^BILLING_/, '').replace(/_/g, ' ').toLowerCase())}</div>
+    <div class="u-subtiny">${h(e.actor_name || '—')} · ${fmtDate((e.created_at || '').slice(0, 10))}${e.new_value ? ' · ' + h(String(e.new_value).slice(0, 60)) : ''}</div></div>`).join('') || '<p class="u-muted" style="font-size:.85rem;margin:0">No history yet.</p>'}</div>`;
 }
 function btDateRow(id, label, val) {
   return `<div style="display:flex;gap:10px;align-items:center;justify-content:space-between">
@@ -344,18 +524,18 @@ async function btRecordSubmit(id) {
   if (!invoice_date) { showToast('Invoice date is required', 'error'); return; }
   if (!(total_amount > 0)) { showToast('Amount with tax is required', 'error'); return; }
   const r = await api(`/billing/invoices/${id}/record`, { method: 'POST', body: JSON.stringify({ invoice_no, invoice_date, taxable_amount, gst_amount, total_amount }) });
-  if (!r) return; closeModal(); showToast(`Invoice ${invoice_no} recorded — DCs billed.`); btRender();
+  if (!r) return; showToast(`Invoice ${invoice_no} recorded — DCs billed.`); if (APP._bt.drawer) APP._bt.drawer.tab = 'submission'; btDrawerReload();
 }
 async function btSubmissionSave(id) {
   const g = x => document.getElementById(x)?.value || null;
   const r = await api(`/billing/invoices/${id}/submission`, { method: 'POST', body: JSON.stringify({
     email_date: g('se-email'), portal_date: g('se-portal'), hardcopy_date: g('se-hard'), submitted_date: g('se-sub'), remarks: g('se-remarks'),
   }) });
-  if (!r) return; closeModal(); showToast(`Submission updated — ${r.submission_status}.`); btRender();
+  if (!r) return; showToast(`Submission updated — ${r.submission_status}.`); btDrawerReload();
 }
 async function btCancelInvoice(id) {
   const r = await api(`/billing/invoices/${id}/cancel`, { method: 'POST', body: '{}' });
-  if (!r) return; closeModal(); showToast('Draft cancelled — DCs released.'); btRender();
+  if (!r) return; showToast('Draft cancelled — DCs released.'); btDrawerClose(); if (APP._bt.tab === 'invoices') btInvoices(document.getElementById('bt-body'));
 }
 
 // Add DCs to an existing (often auto-generated) draft task.
@@ -368,7 +548,7 @@ async function btAddDcsForm(id, clientId) {
       <thead><tr><th><input type="checkbox" id="ad-all"></th><th>DC #</th><th>Category</th><th>Delivered</th><th class="u-right">Value</th></tr></thead>
       <tbody>${list.map(d => `<tr><td><input type="checkbox" data-addc="${h(d.id)}"></td><td><b>${h(d.dc_number || d.id)}</b></td><td>${h(d.category || '—')}</td><td>${fmtDate(d.delivered_at || d.dispatched_at)}</td><td class="u-right">${fmt(d.dc_value)}</td></tr>`).join('')}</tbody></table></div>`
       : `<p class="u-muted" style="margin:0">No unbilled challans available for this client.</p>`,
-    `<button class="btn btn-secondary" ${dataAct('btOpen', id)}>Back</button>${list.length ? `<button class="btn btn-primary" ${dataAct('btAddDcsSubmit', id)}>Add selected</button>` : ''}`);
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Back</button>${list.length ? `<button class="btn btn-primary" ${dataAct('btAddDcsSubmit', id)}>Add selected</button>` : ''}`);
   const all = document.getElementById('ad-all');
   if (all) all.onchange = () => document.querySelectorAll('[data-addc]').forEach(cb => { cb.checked = all.checked; });
 }
@@ -376,7 +556,7 @@ async function btAddDcsSubmit(id) {
   const ids = [...document.querySelectorAll('[data-addc]:checked')].map(cb => cb.dataset.addc);
   if (!ids.length) { showToast('Select at least one DC', 'error'); return; }
   const r = await api(`/billing/invoices/${id}/add-dcs`, { method: 'POST', body: JSON.stringify({ dc_ids: ids }) });
-  if (!r) return; showToast(`${r.dc_count} DC${r.dc_count > 1 ? 's' : ''} on this invoice (${fmt(r.allocated_value)}).`); btOpen(id);
+  if (!r) return; closeModal(); showToast(`${r.dc_count} DC${r.dc_count > 1 ? 's' : ''} on this invoice (${fmt(r.allocated_value)}).`); if (APP._bt.drawer) APP._bt.drawer.tab = 'dcs'; btDrawerReload();
 }
 
 // ── Billing Rules ─────────────────────────────────────────────────────────────

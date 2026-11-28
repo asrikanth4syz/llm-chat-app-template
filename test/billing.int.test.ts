@@ -240,3 +240,20 @@ describe("my tasks + reminders (phase 2)", () => {
     expect(r2.sent).toBe(0);                       // deduped on the second pass
   });
 });
+
+describe("register + history (phase 2 slice 3)", () => {
+  it("lists invoices with frequency/period and returns task history", async () => {
+    const EFF = new Date(Date.now() - 40 * 86400000).toISOString().slice(0, 10);
+    await post("/api/billing/rules", { client_id: "cCh", rule_name: "Monthly", frequency: "Monthly", primary_owner: "u-fin", effective_start: EFF }, finTok);
+    await post("/api/billing/generate", { client_id: "cCh" }, finTok);
+    const t = await db().prepare("SELECT id FROM billing_invoices WHERE client_id='cCh' AND lifecycle='To Be Billed' LIMIT 1").first() as any;
+    await post(`/api/billing/invoices/${t.id}/add-dcs`, { dc_ids: ["dc1"] }, finTok);
+    await post(`/api/billing/invoices/${t.id}/record`, { invoice_no: "INV-H1", invoice_date: TODAY, total_amount: 10000 }, finTok);
+    const list = await (await get("/api/billing/invoices?client_id=cCh", finTok)).json() as any;
+    const row = list.invoices.find((x: any) => x.id === t.id);
+    expect(row.frequency).toBe("Monthly");
+    expect(row.invoice_no).toBe("INV-H1");
+    const hist = await (await get(`/api/billing/invoices/${t.id}/history`, finTok)).json() as any;
+    expect(hist.history.length).toBeGreaterThan(0); // add-dcs + record audited
+  });
+});
