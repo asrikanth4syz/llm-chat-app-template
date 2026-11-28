@@ -4,6 +4,10 @@ import {
   decideRevisionStatus, poBalance, summarizeLedger, evaluateOrderWarnings, type PeriodType,
 } from "./budget_po";
 import { pickEffectivePrice, type ResolvedPrice } from "./pricing";
+import {
+  periodsBetween, periodContaining, invoiceTargetDate, submissionTargetDate,
+  deriveSubmission, money as billMoney, type BillingFrequency, BILLING_FREQUENCIES,
+} from "./billing";
 import { parsePasteText, rankCandidates, searchCandidates, rankLine, type Candidate } from "./smart_paste";
 import { computeQuote, QuoteCalcError, type QuoteCalcResult } from "./quote_calc";
 import {
@@ -7340,6 +7344,19 @@ export default {
       if (path.match(/^\/api\/clients\/[^/]+\/budget-settings$/)  && method==="GET")  return handleGetBudgetSettings(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/budget-settings$/)  && method==="PUT")  return handlePutBudgetSettings(request,env,path);
       if (path==="/api/budget-po/reports"                        && method==="GET")  return handleBudgetPoReports(request,env);
+      // Billing & Invoice Tracker
+      if (path==="/api/billing/overview"                         && method==="GET")  return handleBillingOverview(request,env);
+      if (path==="/api/billing/invoices"                         && method==="GET")  return handleListBillingInvoices(request,env);
+      if (path==="/api/billing/invoices"                         && method==="POST") return handleCreateBillingInvoice(request,env,path);
+      if (path.match(/^\/api\/billing\/invoices\/[^/]+$/)        && method==="GET")  return handleGetBillingInvoice(request,env,path);
+      if (path.match(/^\/api\/billing\/invoices\/[^/]+\/record$/)&& method==="POST") return handleRecordBillingInvoice(request,env,path);
+      if (path.match(/^\/api\/billing\/invoices\/[^/]+\/submission$/)&& method==="POST") return handleBillingSubmission(request,env,path);
+      if (path.match(/^\/api\/billing\/invoices\/[^/]+\/cancel$/)&& method==="POST") return handleCancelBillingInvoice(request,env,path);
+      if (path.match(/^\/api\/billing\/clients\/[^/]+\/config$/) && method==="GET")  return handleGetBillingConfig(request,env,path);
+      if (path.match(/^\/api\/billing\/clients\/[^/]+\/config$/) && method==="PUT")  return handlePutBillingConfig(request,env,path);
+      if (path.match(/^\/api\/billing\/clients\/[^/]+\/periods$/)&& method==="GET")  return handleListBillingPeriods(request,env,path);
+      if (path.match(/^\/api\/billing\/clients\/[^/]+\/unbilled$/)&& method==="GET") return handleBillingUnbilled(request,env,path);
+      if (path.match(/^\/api\/billing\/periods\/[^/]+\/no-billing$/)&& method==="POST") return handleMarkNoBilling(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/locations$/) && method==="POST") return handleAddClientLocation(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/locations\/[^/]+$/) && method==="PATCH") return handlePatchClientLocation(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/rename$/) && method==="POST") return handleRenameClient(request,env,path);
@@ -13368,6 +13385,363 @@ async function ensureBudgetPoSchema(env: Env): Promise<void> {
   await env.DB.prepare("ALTER TABLE budget_revisions ADD COLUMN decided_at TEXT").run().catch(() => {});
   await env.DB.prepare("ALTER TABLE budget_revisions ADD COLUMN reject_reason TEXT").run().catch(() => {});
   _budgetPoReady = true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Billing & Invoice Tracker (core) — record externally-issued invoices against
+// unbilled delivery challans and track preparation then submission. Reuses
+// delivery_challans as the DC source; no statutory invoice generation.
+// ─────────────────────────────────────────────────────────────────────────────
+let _billingReady = false;
+async function ensureBillingSchema(env: Env): Promise<void> {
+  if (_billingReady) return;
+  const stmts = [
+    `CREATE TABLE IF NOT EXISTS billing_configs ( client_id TEXT PRIMARY KEY, frequency TEXT NOT NULL DEFAULT 'Monthly',
+       invoice_target_days INTEGER NOT NULL DEFAULT 2, submission_target_days INTEGER NOT NULL DEFAULT 5, default_owner TEXT,
+       req_email INTEGER NOT NULL DEFAULT 1, req_portal INTEGER NOT NULL DEFAULT 0, req_hardcopy INTEGER NOT NULL DEFAULT 0,
+       active INTEGER NOT NULL DEFAULT 1, updated_at TEXT DEFAULT (datetime('now')) )`,
+    `CREATE TABLE IF NOT EXISTS billing_periods ( id TEXT PRIMARY KEY, client_id TEXT NOT NULL, frequency TEXT NOT NULL,
+       period_key TEXT NOT NULL, label TEXT, period_start TEXT NOT NULL, period_end TEXT NOT NULL,
+       invoice_target_date TEXT, submission_target_date TEXT, status TEXT NOT NULL DEFAULT 'open',
+       no_billing_reason TEXT, created_at TEXT DEFAULT (datetime('now')), UNIQUE (client_id, period_key) )`,
+    `CREATE INDEX IF NOT EXISTS idx_billperiod_client ON billing_periods (client_id, period_start)`,
+    `CREATE TABLE IF NOT EXISTS billing_invoices ( id TEXT PRIMARY KEY, client_id TEXT NOT NULL, period_id TEXT, owner TEXT,
+       owner_name TEXT, status TEXT NOT NULL DEFAULT 'Draft', submission_status TEXT NOT NULL DEFAULT 'Not Ready',
+       invoice_no TEXT, invoice_date TEXT, taxable_amount REAL, gst_amount REAL, total_amount REAL,
+       allocated_value REAL NOT NULL DEFAULT 0, invoice_target_date TEXT, submission_target_date TEXT, submitted_date TEXT,
+       email_date TEXT, portal_date TEXT, hardcopy_date TEXT, req_email INTEGER NOT NULL DEFAULT 0,
+       req_portal INTEGER NOT NULL DEFAULT 0, req_hardcopy INTEGER NOT NULL DEFAULT 0, remarks TEXT, created_by TEXT,
+       created_by_name TEXT, created_at TEXT DEFAULT (datetime('now')), recorded_at TEXT, cancelled_at TEXT,
+       updated_by TEXT, updated_at TEXT )`,
+    `CREATE INDEX IF NOT EXISTS idx_billinv_client ON billing_invoices (client_id, status)`,
+    `CREATE INDEX IF NOT EXISTS idx_billinv_period ON billing_invoices (period_id)`,
+    `CREATE TABLE IF NOT EXISTS billing_invoice_dcs ( id TEXT PRIMARY KEY, invoice_id TEXT NOT NULL, dc_id TEXT NOT NULL,
+       dc_number TEXT, dc_value REAL NOT NULL DEFAULT 0, created_at TEXT DEFAULT (datetime('now')), UNIQUE (dc_id) )`,
+    `CREATE INDEX IF NOT EXISTS idx_billinvdc_inv ON billing_invoice_dcs (invoice_id)`,
+  ];
+  for (const s of stmts) await env.DB.prepare(s).run().catch(() => {});
+  _billingReady = true;
+}
+
+const BILLING_ROLES = ["super_admin", "ops_admin", "finance_admin"];
+function isBillingUser(role: string): boolean { return BILLING_ROLES.includes(role); }
+function requireBilling(user: JWTPayload | null): Response | null {
+  if (!user) return json({ error: "Unauthorized" }, 401);
+  if (!isBillingUser(user.role)) return json({ error: "Billing is handled by Finance / Ops." }, 403);
+  return null;
+}
+function billFreq(v: unknown): BillingFrequency {
+  const s = String(v || "Monthly");
+  return (BILLING_FREQUENCIES as string[]).includes(s) ? (s as BillingFrequency) : "Monthly";
+}
+async function getBillingConfigRow(env: Env, clientId: string): Promise<Record<string, unknown>> {
+  await ensureBillingSchema(env);
+  let c = await env.DB.prepare("SELECT * FROM billing_configs WHERE client_id=?").bind(clientId).first() as Record<string, unknown> | null;
+  if (!c) {
+    await env.DB.prepare("INSERT OR IGNORE INTO billing_configs (client_id) VALUES (?)").bind(clientId).run();
+    c = await env.DB.prepare("SELECT * FROM billing_configs WHERE client_id=?").bind(clientId).first() as Record<string, unknown> | null;
+  }
+  return c || { client_id: clientId, frequency: "Monthly", invoice_target_days: 2, submission_target_days: 5, req_email: 1, req_portal: 0, req_hardcopy: 0, active: 1 };
+}
+async function clientNameFor(env: Env, clientId: string): Promise<string> {
+  const c = await env.DB.prepare("SELECT name FROM clients WHERE id=?").bind(clientId).first() as { name?: string } | null;
+  return String(c?.name || "");
+}
+
+// GET/PUT /api/billing/clients/:clientId/config
+async function handleGetBillingConfig(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const d = requireBilling(user); if (d) return d;
+  return json(await getBillingConfigRow(env, path.split("/")[4]));
+}
+async function handlePutBillingConfig(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const d = requireBilling(user); if (d) return d;
+  const clientId = path.split("/")[4];
+  await getBillingConfigRow(env, clientId); // ensure row
+  const b = await request.json().catch(() => ({})) as Record<string, unknown>;
+  const fields: string[] = [], vals: unknown[] = [];
+  if (b.frequency !== undefined) { fields.push("frequency=?"); vals.push(billFreq(b.frequency)); }
+  if (b.invoice_target_days !== undefined) { fields.push("invoice_target_days=?"); vals.push(Math.max(0, Number(b.invoice_target_days) || 0)); }
+  if (b.submission_target_days !== undefined) { fields.push("submission_target_days=?"); vals.push(Math.max(0, Number(b.submission_target_days) || 0)); }
+  if (b.default_owner !== undefined) { fields.push("default_owner=?"); vals.push(b.default_owner ? String(b.default_owner) : null); }
+  if (b.req_email !== undefined) { fields.push("req_email=?"); vals.push(b.req_email ? 1 : 0); }
+  if (b.req_portal !== undefined) { fields.push("req_portal=?"); vals.push(b.req_portal ? 1 : 0); }
+  if (b.req_hardcopy !== undefined) { fields.push("req_hardcopy=?"); vals.push(b.req_hardcopy ? 1 : 0); }
+  if (b.active !== undefined) { fields.push("active=?"); vals.push(b.active ? 1 : 0); }
+  if (fields.length) {
+    fields.push("updated_at=datetime('now')");
+    await env.DB.prepare(`UPDATE billing_configs SET ${fields.join(",")} WHERE client_id=?`).bind(...vals, clientId).run();
+    await audit(env, user, "BILLING_CONFIG_UPDATE", "client", clientId, undefined, fields.join(","));
+  }
+  return json(await getBillingConfigRow(env, clientId));
+}
+
+// GET /api/billing/clients/:clientId/periods — generate recent periods idempotently, then list.
+async function handleListBillingPeriods(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const d = requireBilling(user); if (d) return d;
+  const clientId = path.split("/")[4];
+  const cfg = await getBillingConfigRow(env, clientId);
+  const freq = billFreq(cfg.frequency);
+  const today = new Date().toISOString().slice(0, 10);
+  const nowD = new Date();
+  const fromD = new Date(Date.UTC(nowD.getUTCFullYear(), nowD.getUTCMonth() - 2, 1));
+  const from = fromD.toISOString().slice(0, 10);
+  const periods = periodsBetween(freq, from, today);
+  for (const p of periods) {
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO billing_periods (id,client_id,frequency,period_key,label,period_start,period_end,invoice_target_date,submission_target_date)
+       VALUES (?,?,?,?,?,?,?,?,?)`
+    ).bind(uid(), clientId, freq, p.key, p.label, p.start, p.end,
+      invoiceTargetDate(p.end, Number(cfg.invoice_target_days) || 0),
+      submissionTargetDate(p.end, Number(cfg.submission_target_days) || 0)).run().catch(() => {});
+  }
+  const { results } = await env.DB.prepare(
+    `SELECT bp.*, (SELECT COUNT(*) FROM billing_invoices bi WHERE bi.period_id=bp.id AND bi.status!='Cancelled') AS invoice_count
+     FROM billing_periods bp WHERE bp.client_id=? ORDER BY bp.period_start DESC LIMIT 60`
+  ).bind(clientId).all();
+  return json({ frequency: freq, current_key: periodContaining(freq, today).key, periods: results });
+}
+
+// POST /api/billing/periods/:id/no-billing { reason }
+async function handleMarkNoBilling(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const d = requireBilling(user); if (d) return d;
+  await ensureBillingSchema(env);
+  const id = path.split("/")[4];
+  const b = await request.json().catch(() => ({})) as { reason?: string };
+  const reason = String(b.reason || "").trim();
+  if (!reason) return json({ error: "A reason is required to mark a period No Billing Required." }, 400);
+  const p = await env.DB.prepare("SELECT * FROM billing_periods WHERE id=?").bind(id).first() as Record<string, unknown> | null;
+  if (!p) return json({ error: "Period not found" }, 404);
+  const open = await env.DB.prepare("SELECT COUNT(*) AS n FROM billing_invoices WHERE period_id=? AND status!='Cancelled'").bind(id).first() as { n: number };
+  if (Number(open.n) > 0) return json({ error: "This period already has invoices — it can't be marked No Billing Required." }, 400);
+  await env.DB.prepare("UPDATE billing_periods SET status='no_billing', no_billing_reason=? WHERE id=?").bind(reason, id).run();
+  await audit(env, user, "BILLING_NO_BILLING", "billing_period", id, undefined, reason.slice(0, 80));
+  return json({ ok: true, status: "no_billing" });
+}
+
+// GET /api/billing/clients/:clientId/unbilled?period_id= — eligible unbilled DCs,
+// split into in-period and carry-forward, excluding ones reserved in a live invoice.
+async function handleBillingUnbilled(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const d = requireBilling(user); if (d) return d;
+  await ensureBillingSchema(env);
+  const clientId = path.split("/")[4];
+  const periodId = new URL(request.url).searchParams.get("period_id") || "";
+  const period = periodId ? await env.DB.prepare("SELECT * FROM billing_periods WHERE id=? AND client_id=?").bind(periodId, clientId).first() as Record<string, unknown> | null : null;
+  const cname = await clientNameFor(env, clientId);
+  const { results } = await env.DB.prepare(
+    `SELECT dc.id, dc.dc_number, dc.category, dc.status, dc.delivered_at, dc.dispatched_at, dc.order_id,
+            COALESCE(o.grand_total,0) AS dc_value, COALESCE(c.name, dc.client_name) AS client_name
+     FROM delivery_challans dc
+     LEFT JOIN orders o ON dc.order_id=o.id
+     LEFT JOIN clients c ON o.client_id=c.id
+     WHERE dc.status='DELIVERED' AND COALESCE(dc.billed,0)=0
+       AND (o.client_id=? OR (dc.order_id IS NULL AND dc.client_name=?))
+       AND dc.id NOT IN (SELECT dc_id FROM billing_invoice_dcs)
+     ORDER BY COALESCE(dc.delivered_at, dc.dispatched_at) ASC`
+  ).bind(clientId, cname).all();
+  const start = period ? String(period.period_start) : null;
+  const end = period ? String(period.period_end) : null;
+  const inPeriod: unknown[] = [], carry: unknown[] = [];
+  for (const r of results as Array<Record<string, unknown>>) {
+    const dd = String(r.delivered_at || r.dispatched_at || "").slice(0, 10);
+    if (period && start && end && dd >= start && dd <= end) inPeriod.push(r);
+    else if (period && start && dd && dd < start) carry.push(r);
+    else if (!period) inPeriod.push(r);
+    else carry.push(r); // after the period (or undated) — show as carry/other so nothing hides
+  }
+  const sum = (a: unknown[]) => billMoney((a as Array<Record<string, unknown>>).reduce((s, x) => s + Number(x.dc_value || 0), 0));
+  return json({ period, in_period: inPeriod, carry_forward: carry, in_period_value: sum(inPeriod), carry_forward_value: sum(carry) });
+}
+
+// POST /api/billing/invoices { client_id, period_id, dc_ids[], owner? } — create a draft
+// and reserve the DCs atomically (UNIQUE(dc_id) blocks a second reservation).
+async function handleCreateBillingInvoice(request: Request, env: Env, _path: string): Promise<Response> {
+  const user = await getUser(request, env); const d = requireBilling(user); if (d) return d;
+  await ensureBillingSchema(env);
+  const b = await request.json().catch(() => ({})) as { client_id?: string; period_id?: string; dc_ids?: string[]; owner?: string };
+  const clientId = String(b.client_id || "");
+  const dcIds = Array.isArray(b.dc_ids) ? b.dc_ids.map(String).filter(Boolean) : [];
+  if (!clientId) return json({ error: "client_id is required" }, 400);
+  if (!dcIds.length) return json({ error: "Select at least one delivery challan." }, 400);
+  const cfg = await getBillingConfigRow(env, clientId);
+  const cname = await clientNameFor(env, clientId);
+  // Re-validate the DCs server-side: delivered, unbilled, this client, not reserved.
+  const ph = dcIds.map(() => "?").join(",");
+  const { results } = await env.DB.prepare(
+    `SELECT dc.id, dc.dc_number, COALESCE(o.grand_total,0) AS dc_value
+     FROM delivery_challans dc LEFT JOIN orders o ON dc.order_id=o.id LEFT JOIN clients c ON o.client_id=c.id
+     WHERE dc.id IN (${ph}) AND dc.status='DELIVERED' AND COALESCE(dc.billed,0)=0
+       AND (o.client_id=? OR (dc.order_id IS NULL AND dc.client_name=?))
+       AND dc.id NOT IN (SELECT dc_id FROM billing_invoice_dcs)`
+  ).bind(...dcIds, clientId, cname).all();
+  const valid = results as Array<Record<string, unknown>>;
+  if (valid.length !== dcIds.length) return json({ error: "Some DCs are no longer eligible (already billed, reserved in another invoice, or not this client's). Refresh and try again." }, 409);
+  const invId = uid();
+  const allocated = billMoney(valid.reduce((s, r) => s + Number(r.dc_value || 0), 0));
+  let ownerId = b.owner ? String(b.owner) : (cfg.default_owner ? String(cfg.default_owner) : null);
+  let ownerName: string | null = null;
+  if (ownerId) {
+    const u = await env.DB.prepare("SELECT name FROM users WHERE id=? AND active=1").bind(ownerId).first() as { name?: string } | null;
+    if (!u) ownerId = null; else ownerName = String(u.name || "");
+  }
+  const period = b.period_id ? await env.DB.prepare("SELECT * FROM billing_periods WHERE id=? AND client_id=?").bind(b.period_id, clientId).first() as Record<string, unknown> | null : null;
+  const stmts = [
+    env.DB.prepare(
+      `INSERT INTO billing_invoices (id,client_id,period_id,owner,owner_name,status,submission_status,allocated_value,
+        invoice_target_date,submission_target_date,req_email,req_portal,req_hardcopy,created_by,created_by_name)
+       VALUES (?,?,?,?,?, 'Draft','Not Ready', ?,?,?,?,?,?,?,?)`
+    ).bind(invId, clientId, period ? String(period.id) : null, ownerId, ownerName, allocated,
+      period ? String(period.invoice_target_date || "") || null : null,
+      period ? String(period.submission_target_date || "") || null : null,
+      Number(cfg.req_email) ? 1 : 0, Number(cfg.req_portal) ? 1 : 0, Number(cfg.req_hardcopy) ? 1 : 0,
+      user!.sub, user!.name),
+    ...valid.map((r) => env.DB.prepare("INSERT INTO billing_invoice_dcs (id,invoice_id,dc_id,dc_number,dc_value) VALUES (?,?,?,?,?)")
+      .bind(uid(), invId, String(r.id), String(r.dc_number || ""), Number(r.dc_value || 0))),
+  ];
+  try { await env.DB.batch(stmts); }
+  catch { return json({ error: "One of the selected DCs was just reserved by someone else. Refresh and try again." }, 409); }
+  await audit(env, user, "BILLING_INVOICE_DRAFT", "billing_invoice", invId, undefined, `${valid.length} DCs · ₹${Math.round(allocated)}`);
+  return json({ id: invId, status: "Draft", allocated_value: allocated, dc_count: valid.length }, 201);
+}
+
+// GET /api/billing/invoices?client_id=&status=&owner=
+async function handleListBillingInvoices(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const d = requireBilling(user); if (d) return d;
+  await ensureBillingSchema(env);
+  const q = new URL(request.url).searchParams;
+  const where: string[] = ["1=1"]; const vals: unknown[] = [];
+  if (q.get("client_id")) { where.push("bi.client_id=?"); vals.push(q.get("client_id")); }
+  if (q.get("status")) { where.push("bi.status=?"); vals.push(q.get("status")); }
+  if (q.get("owner")) { where.push("bi.owner=?"); vals.push(q.get("owner")); }
+  if (q.get("period_id")) { where.push("bi.period_id=?"); vals.push(q.get("period_id")); }
+  const { results } = await env.DB.prepare(
+    `SELECT bi.*, c.name AS client_name, bp.label AS period_label,
+            (SELECT COUNT(*) FROM billing_invoice_dcs x WHERE x.invoice_id=bi.id) AS dc_count
+     FROM billing_invoices bi LEFT JOIN clients c ON bi.client_id=c.id LEFT JOIN billing_periods bp ON bi.period_id=bp.id
+     WHERE ${where.join(" AND ")} ORDER BY bi.created_at DESC LIMIT 300`
+  ).bind(...vals).all();
+  return json({ invoices: results });
+}
+
+// GET /api/billing/invoices/:id — detail with DC allocations.
+async function handleGetBillingInvoice(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const d = requireBilling(user); if (d) return d;
+  await ensureBillingSchema(env);
+  const id = path.split("/")[4];
+  const inv = await env.DB.prepare(
+    `SELECT bi.*, c.name AS client_name, bp.label AS period_label FROM billing_invoices bi
+     LEFT JOIN clients c ON bi.client_id=c.id LEFT JOIN billing_periods bp ON bi.period_id=bp.id WHERE bi.id=?`
+  ).bind(id).first() as Record<string, unknown> | null;
+  if (!inv) return json({ error: "Invoice not found" }, 404);
+  const { results: dcs } = await env.DB.prepare("SELECT * FROM billing_invoice_dcs WHERE invoice_id=? ORDER BY dc_number").bind(id).all();
+  return json({ ...inv, dcs });
+}
+
+// POST /api/billing/invoices/:id/record — capture the external invoice and mark DCs billed.
+async function handleRecordBillingInvoice(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const d = requireBilling(user); if (d) return d;
+  await ensureBillingSchema(env);
+  const id = path.split("/")[4];
+  const b = await request.json().catch(() => ({})) as Record<string, unknown>;
+  const inv = await env.DB.prepare("SELECT * FROM billing_invoices WHERE id=?").bind(id).first() as Record<string, unknown> | null;
+  if (!inv) return json({ error: "Invoice not found" }, 404);
+  const invoiceNo = String(b.invoice_no || "").trim();
+  const invoiceDate = String(b.invoice_date || "").trim();
+  // Idempotent: re-recording with the same number is a no-op success.
+  if (String(inv.status) === "Recorded") {
+    if (String(inv.invoice_no || "") === invoiceNo) return json({ ok: true, status: "Recorded", idempotent: true });
+    return json({ error: "This invoice is already recorded." }, 400);
+  }
+  if (String(inv.status) !== "Draft") return json({ error: "Only a draft can be recorded." }, 400);
+  if (!invoiceNo) return json({ error: "Invoice number is required." }, 400);
+  if (!invoiceDate) return json({ error: "Invoice date is required." }, 400);
+  const total = billMoney(Number(b.total_amount) || 0);
+  if (!(total > 0)) return json({ error: "Invoice total (amount with tax) is required." }, 400);
+  // Duplicate invoice number within the same client (non-cancelled).
+  const dup = await env.DB.prepare("SELECT id FROM billing_invoices WHERE client_id=? AND invoice_no=? AND status!='Cancelled' AND id!=?")
+    .bind(inv.client_id, invoiceNo, id).first();
+  if (dup) return json({ error: `Invoice number ${invoiceNo} is already recorded for this client.` }, 409);
+  const { results: dcRows } = await env.DB.prepare("SELECT dc_id FROM billing_invoice_dcs WHERE invoice_id=?").bind(id).all();
+  const dcIds = (dcRows as Array<{ dc_id: string }>).map((r) => r.dc_id);
+  const sub = deriveSubmission(true, { email: !!Number(inv.req_email), portal: !!Number(inv.req_portal), hardcopy: !!Number(inv.req_hardcopy) }, {});
+  const stmts = [
+    env.DB.prepare(
+      `UPDATE billing_invoices SET status='Recorded', submission_status=?, invoice_no=?, invoice_date=?,
+        taxable_amount=?, gst_amount=?, total_amount=?, remarks=COALESCE(?,remarks), recorded_at=datetime('now'),
+        updated_by=?, updated_at=datetime('now') WHERE id=?`
+    ).bind(sub.status, invoiceNo, invoiceDate, billMoney(Number(b.taxable_amount) || 0), billMoney(Number(b.gst_amount) || 0),
+      total, b.remarks != null ? String(b.remarks) : null, user!.sub, id),
+    ...dcIds.map((dcId) => env.DB.prepare("UPDATE delivery_challans SET billed=1, billed_at=datetime('now'), invoice_no=?, invoice_date=? WHERE id=?")
+      .bind(invoiceNo, invoiceDate, dcId)),
+  ];
+  await env.DB.batch(stmts);
+  await audit(env, user, "BILLING_INVOICE_RECORD", "billing_invoice", id, undefined, `${invoiceNo} · ₹${Math.round(total)} · ${dcIds.length} DCs`);
+  return json({ ok: true, status: "Recorded", submission_status: sub.status, variance: billMoney(Math.abs(total - Number(inv.allocated_value || 0))) });
+}
+
+// POST /api/billing/invoices/:id/submission — record submission channel dates.
+async function handleBillingSubmission(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const d = requireBilling(user); if (d) return d;
+  await ensureBillingSchema(env);
+  const id = path.split("/")[4];
+  const inv = await env.DB.prepare("SELECT * FROM billing_invoices WHERE id=?").bind(id).first() as Record<string, unknown> | null;
+  if (!inv) return json({ error: "Invoice not found" }, 404);
+  if (String(inv.status) !== "Recorded") return json({ error: "Record the invoice before tracking submission." }, 400);
+  const b = await request.json().catch(() => ({})) as Record<string, unknown>;
+  const dateOr = (k: string, cur: unknown) => b[k] !== undefined ? (b[k] ? String(b[k]) : null) : (cur != null ? String(cur) : null);
+  const email = dateOr("email_date", inv.email_date);
+  const portal = dateOr("portal_date", inv.portal_date);
+  const hardcopy = dateOr("hardcopy_date", inv.hardcopy_date);
+  const manual = dateOr("submitted_date", inv.submitted_date);
+  const sub = deriveSubmission(true,
+    { email: !!Number(inv.req_email), portal: !!Number(inv.req_portal), hardcopy: !!Number(inv.req_hardcopy) },
+    { email, portal, hardcopy, submitted: manual });
+  await env.DB.prepare(
+    `UPDATE billing_invoices SET email_date=?, portal_date=?, hardcopy_date=?, submitted_date=?, submission_status=?,
+      remarks=COALESCE(?,remarks), updated_by=?, updated_at=datetime('now') WHERE id=?`
+  ).bind(email, portal, hardcopy, sub.submittedDate || manual, sub.status, b.remarks != null ? String(b.remarks) : null, user!.sub, id).run();
+  await audit(env, user, "BILLING_SUBMISSION_UPDATE", "billing_invoice", id, undefined, sub.status);
+  return json({ ok: true, submission_status: sub.status, submitted_date: sub.submittedDate || manual });
+}
+
+// POST /api/billing/invoices/:id/cancel — cancel a draft and release its DCs.
+async function handleCancelBillingInvoice(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const d = requireBilling(user); if (d) return d;
+  await ensureBillingSchema(env);
+  const id = path.split("/")[4];
+  const inv = await env.DB.prepare("SELECT * FROM billing_invoices WHERE id=?").bind(id).first() as Record<string, unknown> | null;
+  if (!inv) return json({ error: "Invoice not found" }, 404);
+  if (String(inv.status) === "Recorded") return json({ error: "A recorded invoice is reversed through the accounting process, not cancelled here." }, 400);
+  if (String(inv.status) === "Cancelled") return json({ ok: true, status: "Cancelled" });
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM billing_invoice_dcs WHERE invoice_id=?").bind(id),
+    env.DB.prepare("UPDATE billing_invoices SET status='Cancelled', cancelled_at=datetime('now'), updated_by=? WHERE id=?").bind(user!.sub, id),
+  ]);
+  await audit(env, user, "BILLING_INVOICE_CANCEL", "billing_invoice", id);
+  return json({ ok: true, status: "Cancelled" });
+}
+
+// GET /api/billing/overview — KPIs across all clients in scope (internal only).
+async function handleBillingOverview(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const d = requireBilling(user); if (d) return d;
+  await ensureBillingSchema(env);
+  const today = new Date().toISOString().slice(0, 10);
+  const month = today.slice(0, 7);
+  const unbilled = await env.DB.prepare(
+    `SELECT COUNT(*) AS n, COALESCE(SUM(COALESCE(o.grand_total,0)),0) AS v FROM delivery_challans dc
+     LEFT JOIN orders o ON dc.order_id=o.id
+     WHERE dc.status='DELIVERED' AND COALESCE(dc.billed,0)=0 AND dc.id NOT IN (SELECT dc_id FROM billing_invoice_dcs)`
+  ).first() as { n: number; v: number };
+  const drafts = await env.DB.prepare("SELECT COUNT(*) AS n, COALESCE(SUM(allocated_value),0) AS v FROM billing_invoices WHERE status='Draft'").first() as { n: number; v: number };
+  const pendingSub = await env.DB.prepare("SELECT COUNT(*) AS n, COALESCE(SUM(total_amount),0) AS v FROM billing_invoices WHERE status='Recorded' AND submission_status!='Submitted'").first() as { n: number; v: number };
+  const overdueSub = await env.DB.prepare("SELECT COUNT(*) AS n FROM billing_invoices WHERE status='Recorded' AND submission_status!='Submitted' AND submission_target_date IS NOT NULL AND submission_target_date<?").bind(today).first() as { n: number };
+  const billedMonth = await env.DB.prepare("SELECT COUNT(*) AS n, COALESCE(SUM(total_amount),0) AS v FROM billing_invoices WHERE status='Recorded' AND substr(invoice_date,1,7)=?").bind(month).first() as { n: number; v: number };
+  return json({
+    unbilled_dcs: unbilled.n, unbilled_value: unbilled.v,
+    drafts: drafts.n, draft_value: drafts.v,
+    pending_submission: pendingSub.n, pending_submission_value: pendingSub.v,
+    overdue_submission: overdueSub.n,
+    billed_this_month: billedMonth.n, billed_this_month_value: billedMonth.v,
+  });
 }
 
 const BUDGET_EDIT_ROLES = ["client_admin", "our_admin", "ops_admin", "super_admin"]; // our_admin acts "on behalf"

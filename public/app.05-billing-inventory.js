@@ -48,6 +48,7 @@ async function renderDCBilling(el) {
   }
 
   function financeTabContent(tab) {
+    if (tab === 'inv_tracker') return `<div class="u-muted" style="padding:16px">Loading…</div>`;
     if (tab === 'dc_tracker') {
       const today = new Date().toISOString().slice(0,10);
       const thisMonth = new Date().toISOString().slice(0,7);
@@ -202,6 +203,7 @@ async function renderDCBilling(el) {
   }
 
   const FINANCE_TABS = [
+    { id: 'inv_tracker', label: 'Invoice Tracker' },
     { id: 'dc_tracker', label: 'DC Tracker' },
     { id: 'ar_aging', label: 'AR Aging' },
     { id: 'ap_aging', label: 'AP Aging' },
@@ -209,25 +211,28 @@ async function renderDCBilling(el) {
   ];
 
   el.innerHTML = `
-  ${pageHeader('DC Billing', 'Delivery challan billing pipeline')}
+  ${pageHeader('Billing', 'Invoice tracker & delivery-challan billing')}
   <div class="tabs" style="margin-bottom:20px">
     ${FINANCE_TABS.map(t=>`<button class="tab-btn${APP._financeTab===t.id?' active':''}" ${dataAct('switchFinanceTab', t.id)}>${t.label}</button>`).join('')}
   </div>
   <div id="finance-tab-content">${financeTabContent(APP._financeTab)}</div>`;
 
   APP._financeTabContent = financeTabContent;
+  if (APP._financeTab === 'inv_tracker') renderBillingTracker(document.getElementById('finance-tab-content'));
 }
 
 async function switchFinanceTab(tab) {
   APP._financeTab = tab;
   document.querySelectorAll('.tabs .tab-btn').forEach(b => {
-    const map = { 'dc_tracker':'DC Tracker','ar_aging':'AR Aging','ap_aging':'AP Aging','margin_analysis':'Margin Analysis' };
+    const map = { 'inv_tracker':'Invoice Tracker','dc_tracker':'DC Tracker','ar_aging':'AR Aging','ap_aging':'AP Aging','margin_analysis':'Margin Analysis' };
     b.classList.toggle('active', b.textContent.trim() === (map[tab]||tab));
   });
   const el = document.getElementById('finance-tab-content');
   if (!el) return;
 
-  if (tab === 'dc_tracker' || tab === 'ar_aging') {
+  if (tab === 'inv_tracker') {
+    renderBillingTracker(el);
+  } else if (tab === 'dc_tracker' || tab === 'ar_aging') {
     if (APP._financeTabContent) el.innerHTML = APP._financeTabContent(tab);
   } else if (tab === 'ap_aging') {
     el.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading AP data…</p></div>`;
