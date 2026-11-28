@@ -28,6 +28,7 @@ function btRender() {
       ${btSubtab('overview', 'Overview')}
       ${btSubtab('tobill', 'To Be Billed')}
       ${btSubtab('invoices', 'Invoices')}
+      ${btSubtab('rules', 'Billing Rules')}
     </div>
     <div id="bt-body"><div class="u-muted" style="padding:16px">Loading…</div></div>`;
   btBody();
@@ -39,12 +40,21 @@ async function btBody() {
   if (APP._bt.tab === 'overview') return btOverview(body);
   if (APP._bt.tab === 'tobill') return btToBill(body);
   if (APP._bt.tab === 'invoices') return btInvoices(body);
+  if (APP._bt.tab === 'rules') return btRules(body);
+}
+
+async function btGenerate() {
+  const r = await api('/billing/generate', { method: 'POST', body: '{}' });
+  if (!r) return;
+  showToast(`Generated ${r.cyclesCreated} cycle${r.cyclesCreated === 1 ? '' : 's'} and ${r.tasksCreated} task${r.tasksCreated === 1 ? '' : 's'}.`);
+  btRender();
 }
 
 // ── Overview ────────────────────────────────────────────────────────────────
 async function btOverview(body) {
   const o = await api('/billing/overview'); if (!o) return;
   body.innerHTML = `
+    <div style="display:flex;justify-content:flex-end;margin-bottom:10px"><button class="btn btn-secondary btn-sm" ${dataAct('btGenerate')} title="Create billing cycles and tasks for all active rules">↻ Generate billing now</button></div>
     <div class="tile-grid" style="grid-template-columns:repeat(auto-fill,minmax(180px,1fr));margin-bottom:18px">
       ${tileHtml({ label: 'Unbilled DCs', value: o.unbilled_dcs, sub: `${fmt(o.unbilled_value)} to bill`, accent: o.unbilled_dcs ? 'var(--warning)' : 'var(--success)', act: dataAct('btGo', 'tobill') })}
       ${tileHtml({ label: 'Drafts', value: o.drafts, sub: `${fmt(o.draft_value)} reserved`, accent: 'var(--navy)', act: dataAct('btGo', 'invoices') })}
@@ -217,12 +227,14 @@ async function btInvoices(body) {
   body.innerHTML = `
     <div class="card"><div class="card-header"><span>Invoice register (${inv.length})</span></div>
     <div class="table-wrap"><table class="table">
-      <thead><tr><th>Owner</th><th>Client</th><th>Invoice No.</th><th>Date</th><th class="u-right">Amount</th><th>Submission</th><th>Target</th><th>Status</th><th></th></tr></thead>
+      <thead><tr><th>Owner</th><th>Client / category</th><th>Stage</th><th>Invoice No.</th><th>Date</th><th class="u-right">Amount</th><th>Submission</th><th>Target</th><th>Status</th><th></th></tr></thead>
       <tbody>${inv.map(i => {
         const overdue = i.status === 'Recorded' && i.submission_status !== 'Submitted' && i.submission_target_date && i.submission_target_date < today;
+        const stage = i.exception || i.lifecycle || (i.status === 'Recorded' ? 'Invoice Generated' : 'Under Preparation');
         return `<tr>
           <td>${h(i.owner_name || '—')}</td>
-          <td><b>${h(i.client_name || '—')}</b>${i.period_label ? `<div class="u-subtiny">${h(i.period_label)}</div>` : ''}</td>
+          <td><b>${h(i.client_name || '—')}</b>${i.category ? ` <span class="badge" style="font-size:.6rem;background:var(--bg);border:1px solid var(--border)">${h(i.category)}</span>` : ''}${i.period_label ? `<div class="u-subtiny">${h(i.period_label)}</div>` : ''}</td>
+          <td><span class="badge" style="background:var(--bg);border:1px solid var(--border);font-size:.66rem;color:${i.exception ? 'var(--danger)' : 'var(--text-muted)'}">${h(stage)}</span></td>
           <td>${i.invoice_no ? `<b>${h(i.invoice_no)}</b>` : '<span class="u-muted">Not yet invoiced</span>'}</td>
           <td>${i.invoice_date ? fmtDate(i.invoice_date) : '—'}</td>
           <td class="u-right" style="font-variant-numeric:tabular-nums">${i.total_amount != null ? fmt(i.total_amount) : fmt(i.allocated_value)}</td>
@@ -231,7 +243,7 @@ async function btInvoices(body) {
           <td>${btStatusBadge(i.status)}</td>
           <td><button class="btn btn-sm btn-secondary" ${dataAct('btOpen', i.id)}>Open</button></td>
         </tr>`;
-      }).join('') || '<tr><td colspan="9" class="u-empty">No invoices yet — create one under To Be Billed.</td></tr>'}
+      }).join('') || '<tr><td colspan="10" class="u-empty">No invoices yet — create one under To Be Billed.</td></tr>'}
       </tbody></table></div></div>`;
   if (APP._bt.openId) { const id = APP._bt.openId; APP._bt.openId = null; btOpen(id); }
 }
@@ -258,7 +270,7 @@ async function btOpen(id) {
         <div><label style="font-size:.72rem;font-weight:700;color:var(--text-muted)">Remarks</label><input type="text" id="se-remarks" value="${h(inv.remarks || '')}" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:7px"></div>
       </div></div>` : ''}`;
   const footer = isDraft
-    ? `<button class="btn btn-secondary" ${dataAct('btCancelInvoice', id)}>Cancel draft</button><button class="btn btn-primary" ${dataAct('btRecordForm', id)}>Record invoice →</button>`
+    ? `<button class="btn btn-secondary" ${dataAct('btCancelInvoice', id)}>Cancel draft</button><button class="btn btn-secondary" ${dataAct('btAddDcsForm', id, inv.client_id)}>＋ Add DCs</button><button class="btn btn-primary" ${dataAct('btRecordForm', id)} ${dcs.length ? '' : 'disabled title="Add at least one DC first"'}>Record invoice →</button>`
     : isRec
       ? `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button><button class="btn btn-primary" ${dataAct('btSubmissionSave', id)}>Save submission</button>`
       : `<button class="btn btn-secondary" ${dataAct('closeModal')}>Close</button>`;
@@ -308,4 +320,121 @@ async function btSubmissionSave(id) {
 async function btCancelInvoice(id) {
   const r = await api(`/billing/invoices/${id}/cancel`, { method: 'POST', body: '{}' });
   if (!r) return; closeModal(); showToast('Draft cancelled — DCs released.'); btRender();
+}
+
+// Add DCs to an existing (often auto-generated) draft task.
+async function btAddDcsForm(id, clientId) {
+  const r = await api(`/billing/clients/${clientId}/unbilled`);
+  if (!r) return;
+  const list = r.in_period || [];
+  openModal('Add delivery challans',
+    list.length ? `<div class="table-wrap" style="max-height:50vh;overflow:auto"><table class="table">
+      <thead><tr><th><input type="checkbox" id="ad-all"></th><th>DC #</th><th>Category</th><th>Delivered</th><th class="u-right">Value</th></tr></thead>
+      <tbody>${list.map(d => `<tr><td><input type="checkbox" data-addc="${h(d.id)}"></td><td><b>${h(d.dc_number || d.id)}</b></td><td>${h(d.category || '—')}</td><td>${fmtDate(d.delivered_at || d.dispatched_at)}</td><td class="u-right">${fmt(d.dc_value)}</td></tr>`).join('')}</tbody></table></div>`
+      : `<p class="u-muted" style="margin:0">No unbilled challans available for this client.</p>`,
+    `<button class="btn btn-secondary" ${dataAct('btOpen', id)}>Back</button>${list.length ? `<button class="btn btn-primary" ${dataAct('btAddDcsSubmit', id)}>Add selected</button>` : ''}`);
+  const all = document.getElementById('ad-all');
+  if (all) all.onchange = () => document.querySelectorAll('[data-addc]').forEach(cb => { cb.checked = all.checked; });
+}
+async function btAddDcsSubmit(id) {
+  const ids = [...document.querySelectorAll('[data-addc]:checked')].map(cb => cb.dataset.addc);
+  if (!ids.length) { showToast('Select at least one DC', 'error'); return; }
+  const r = await api(`/billing/invoices/${id}/add-dcs`, { method: 'POST', body: JSON.stringify({ dc_ids: ids }) });
+  if (!r) return; showToast(`${r.dc_count} DC${r.dc_count > 1 ? 's' : ''} on this invoice (${fmt(r.allocated_value)}).`); btOpen(id);
+}
+
+// ── Billing Rules ─────────────────────────────────────────────────────────────
+const BT_WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const BT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const BT_FREQ_LABEL = { Weekly: 'Weekly', Fortnightly: 'Twice monthly', Monthly: 'Monthly', TwoMonthly: 'Every two months', Quarterly: 'Quarterly', AdHoc: 'Ad hoc' };
+const BT_FREQ_ALL = ['Weekly', 'Fortnightly', 'Monthly', 'TwoMonthly', 'Quarterly', 'AdHoc'];
+
+async function btRules(body) {
+  const r = await api('/billing/rules'); if (!r) return;
+  const rules = r.rules || [];
+  APP._bt._rules = rules;
+  body.innerHTML = `
+    <div style="display:flex;gap:10px;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+      <span class="u-muted" style="font-size:.84rem">Rules drive the schedule: each active rule auto-generates a billing task per period.</span>
+      <span style="display:flex;gap:8px"><button class="btn btn-secondary btn-sm" ${dataAct('btGenerate')}>↻ Generate now</button><button class="btn btn-primary btn-sm" ${dataAct('btRuleForm', '')}>＋ New rule</button></span>
+    </div>
+    <div class="card"><div class="table-wrap"><table class="table">
+      <thead><tr><th>Rule</th><th>Client</th><th>Category</th><th>Frequency</th><th>Owner</th><th>Targets (prep/sub)</th><th>Effective</th><th>Status</th><th></th></tr></thead>
+      <tbody>${rules.map(x => `<tr${x.active ? '' : ' style="opacity:.55"'}>
+        <td><b>${h(x.rule_name)}</b></td>
+        <td>${h(x.client_name || '—')}</td>
+        <td>${x.category ? h(x.category) : '<span class="u-muted">All</span>'}</td>
+        <td>${h(BT_FREQ_LABEL[x.frequency] || x.frequency)}${x.frequency === 'Weekly' && x.closing_weekday != null ? ` · ${BT_WEEKDAYS[x.closing_weekday]}` : ''}${x.frequency === 'Monthly' && x.cutoff_day ? ` · cut-off ${x.cutoff_day}` : ''}${(x.frequency === 'TwoMonthly' || x.frequency === 'Quarterly') && x.anchor_month ? ` · from ${BT_MONTHS[x.anchor_month - 1]}` : ''}</td>
+        <td>${h(x.primary_owner_name || '—')}${x.backup_owner_name ? `<div class="u-subtiny">backup: ${h(x.backup_owner_name)}</div>` : ''}</td>
+        <td>${x.prep_target_days}d / ${x.submission_target_days}d${x.use_working_days ? ' <span class="u-subtiny">(working)</span>' : ''}</td>
+        <td>${x.effective_start ? fmtDate(x.effective_start) : '—'}${x.effective_end ? ' → ' + fmtDate(x.effective_end) : ''}</td>
+        <td><span class="badge ${x.active ? 'badge-success' : ''}" style="${x.active ? '' : 'background:var(--bg);border:1px solid var(--border)'}">${x.active ? 'Active' : 'Inactive'}</span></td>
+        <td style="white-space:nowrap"><button class="btn btn-sm btn-secondary" ${dataAct('btRuleForm', x.id)}>Edit</button> <button class="btn btn-sm btn-secondary" ${dataAct('btToggleRule', x.id, x.active ? 0 : 1)}>${x.active ? 'Deactivate' : 'Activate'}</button></td>
+      </tr>`).join('') || '<tr><td colspan="9" class="u-empty">No billing rules yet. Create one to start the schedule.</td></tr>'}
+      </tbody></table></div></div>`;
+}
+
+function btRuleForm(id) {
+  const rule = id ? (APP._bt._rules || []).find(r => r.id === id) : null;
+  // refresh rule cache from the last list render if needed
+  const clients = APP._bt.clients || [], owners = APP._bt.users || [];
+  const g = (k, d) => rule ? (rule[k] ?? d) : d;
+  const freq = g('frequency', 'Monthly');
+  openModal(id ? 'Edit billing rule' : 'New billing rule',
+    `<div style="display:flex;gap:10px"><div class="form-group" style="flex:2"><label>Rule name <span style="color:var(--danger)">*</span></label><input type="text" id="br-name" value="${h(g('rule_name', ''))}" placeholder="e.g. Chaayos — monthly, Pantry"></div>
+       <div class="form-group" style="flex:1"><label>Category</label><input type="text" id="br-cat" value="${h(g('category', '') || '')}" placeholder="All"></div></div>
+     <div class="form-group"><label>Client <span style="color:var(--danger)">*</span></label><select id="br-client" ${id ? 'disabled' : ''}><option value="">Select…</option>${clients.map(c => `<option value="${h(c.id)}" ${g('client_id', APP._bt.clientId) === c.id ? 'selected' : ''}>${h(c.name)}</option>`).join('')}</select></div>
+     <div style="display:flex;gap:10px"><div class="form-group" style="flex:1"><label>Frequency</label><select id="br-freq" onchange="btRuleFreqHint()">${BT_FREQ_ALL.map(f => `<option value="${f}" ${freq === f ? 'selected' : ''}>${BT_FREQ_LABEL[f]}</option>`).join('')}</select></div>
+       <div class="form-group" style="flex:1"><label>Cut-off detail <span id="br-cut-hint" class="u-subtiny"></span></label>
+         <select id="br-wday" style="display:none">${BT_WEEKDAYS.map((w, i) => `<option value="${i}" ${Number(g('closing_weekday', 0)) === i ? 'selected' : ''}>${w}</option>`).join('')}</select>
+         <input type="number" id="br-cutoff" min="1" max="28" placeholder="Day of month (blank = month end)" value="${g('cutoff_day', '') || ''}" style="display:none">
+         <select id="br-anchor" style="display:none">${BT_MONTHS.map((m, i) => `<option value="${i + 1}" ${Number(g('anchor_month', 1)) === i + 1 ? 'selected' : ''}>${m}</option>`).join('')}</select>
+         <span id="br-cut-none" class="u-muted" style="font-size:.8rem">No extra setting</span></div></div>
+     <div style="display:flex;gap:10px"><div class="form-group" style="flex:1"><label>Primary owner</label><select id="br-owner"><option value="">Unassigned</option>${owners.map(u => `<option value="${h(u.id)}" ${g('primary_owner', '') === u.id ? 'selected' : ''}>${h(u.name)}</option>`).join('')}</select></div>
+       <div class="form-group" style="flex:1"><label>Backup owner</label><select id="br-backup"><option value="">None</option>${owners.map(u => `<option value="${h(u.id)}" ${g('backup_owner', '') === u.id ? 'selected' : ''}>${h(u.name)}</option>`).join('')}</select></div></div>
+     <div style="display:flex;gap:10px"><div class="form-group" style="flex:1"><label>Prep target (days after cut-off)</label><input type="number" id="br-prep" min="0" value="${g('prep_target_days', 2)}"></div>
+       <div class="form-group" style="flex:1"><label>Submission target (days)</label><input type="number" id="br-sub" min="0" value="${g('submission_target_days', 5)}"></div></div>
+     <label style="display:block;font-size:.86rem;margin-bottom:8px"><input type="checkbox" id="br-wd" ${Number(g('use_working_days', 0)) ? 'checked' : ''}> Count targets in working days</label>
+     <div style="display:flex;gap:10px"><div class="form-group" style="flex:1"><label>Effective from</label><input type="date" id="br-eff" value="${g('effective_start', new Date().toISOString().slice(0, 10))}"></div>
+       <div class="form-group" style="flex:1"><label>Effective to (optional)</label><input type="date" id="br-effend" value="${g('effective_end', '') || ''}"></div></div>
+     <div class="form-group"><label>Required submission channels</label>
+       <label style="font-weight:400;font-size:.86rem;margin-right:12px"><input type="checkbox" id="br-email" ${Number(g('req_email', 1)) ? 'checked' : ''}> Email</label>
+       <label style="font-weight:400;font-size:.86rem;margin-right:12px"><input type="checkbox" id="br-hard" ${Number(g('req_hardcopy', 0)) ? 'checked' : ''}> Hard copy</label>
+       <label style="font-weight:400;font-size:.86rem"><input type="checkbox" id="br-signed" ${Number(g('req_signed_dc', 0)) ? 'checked' : ''}> Signed DC</label></div>
+     <div class="form-group"><label>Default PO (optional)</label><input type="text" id="br-po" value="${h(g('po_default', '') || '')}"></div>
+     <div class="form-group"><label>Standing instructions</label><textarea id="br-inst" rows="2">${h(g('instructions', '') || '')}</textarea></div>`,
+    `<button class="btn btn-secondary" ${dataAct('closeModal')}>Cancel</button><button class="btn btn-primary" ${dataAct('btRuleSave', id)}>${id ? 'Save' : 'Create rule'}</button>`);
+  btRuleFreqHint();
+}
+function btRuleFreqHint() {
+  const f = document.getElementById('br-freq')?.value;
+  const show = (el, on) => { const e = document.getElementById(el); if (e) e.style.display = on ? '' : 'none'; };
+  show('br-wday', f === 'Weekly'); show('br-cutoff', f === 'Monthly'); show('br-anchor', f === 'TwoMonthly' || f === 'Quarterly');
+  show('br-cut-none', !['Weekly', 'Monthly', 'TwoMonthly', 'Quarterly'].includes(f));
+  const hint = document.getElementById('br-cut-hint');
+  if (hint) hint.textContent = f === 'Weekly' ? '(closing weekday)' : f === 'Monthly' ? '(closing day)' : (f === 'TwoMonthly' || f === 'Quarterly') ? '(window start month)' : '';
+}
+async function btRuleSave(id) {
+  const v = x => document.getElementById(x);
+  const freq = v('br-freq').value;
+  const body = {
+    rule_name: v('br-name').value.trim(), category: v('br-cat').value.trim() || null, frequency: freq,
+    primary_owner: v('br-owner').value || null, backup_owner: v('br-backup').value || null,
+    prep_target_days: Number(v('br-prep').value) || 0, submission_target_days: Number(v('br-sub').value) || 0,
+    use_working_days: v('br-wd').checked, effective_start: v('br-eff').value || null, effective_end: v('br-effend').value || null,
+    req_email: v('br-email').checked, req_hardcopy: v('br-hard').checked, req_signed_dc: v('br-signed').checked,
+    po_default: v('br-po').value.trim() || null, instructions: v('br-inst').value.trim() || null,
+    closing_weekday: freq === 'Weekly' ? Number(v('br-wday').value) : null,
+    cutoff_day: freq === 'Monthly' && v('br-cutoff').value ? Number(v('br-cutoff').value) : null,
+    anchor_month: (freq === 'TwoMonthly' || freq === 'Quarterly') ? Number(v('br-anchor').value) : null,
+  };
+  if (!body.rule_name) { showToast('Rule name is required', 'error'); return; }
+  let r;
+  if (id) r = await api(`/billing/rules/${id}`, { method: 'PUT', body: JSON.stringify(body) });
+  else { body.client_id = v('br-client').value; if (!body.client_id) { showToast('Select a client', 'error'); return; } r = await api('/billing/rules', { method: 'POST', body: JSON.stringify(body) }); }
+  if (!r) return; closeModal(); showToast(id ? 'Rule saved.' : 'Rule created.'); btRender();
+}
+async function btToggleRule(id, active) {
+  const r = await api(`/billing/rules/${id}`, { method: 'PUT', body: JSON.stringify({ active: !!active }) });
+  if (!r) return; showToast(active ? 'Rule activated.' : 'Rule deactivated.'); btRender();
 }

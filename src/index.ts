@@ -7,6 +7,7 @@ import { pickEffectivePrice, type ResolvedPrice } from "./pricing";
 import {
   periodsBetween, periodContaining, invoiceTargetDate, submissionTargetDate,
   deriveSubmission, money as billMoney, type BillingFrequency, BILLING_FREQUENCIES,
+  cyclesBetween, deadlineFrom, type CycleConfig,
 } from "./billing";
 import { parsePasteText, rankCandidates, searchCandidates, rankLine, type Candidate } from "./smart_paste";
 import { computeQuote, QuoteCalcError, type QuoteCalcResult } from "./quote_calc";
@@ -7075,6 +7076,9 @@ export default {
       if ((controller.cron || "") === RECURRING_CRON) {
         try { const r = await runRecurringGeneration(env); console.log("recurring generation:", JSON.stringify(r)); }
         catch (e) { console.error("recurring generation cron error:", String(e)); }
+        // Billing cycles + initial tasks for active rules (idempotent).
+        try { const b = await generateBilling(env); console.log("billing generation:", JSON.stringify(b)); }
+        catch (e) { console.error("billing generation cron error:", String(e)); }
         return;
       }
       // Nightly Zoho Books delta (23:00 IST). Runs ONLY the finance-mirror refresh — no
@@ -7357,6 +7361,11 @@ export default {
       if (path.match(/^\/api\/billing\/clients\/[^/]+\/periods$/)&& method==="GET")  return handleListBillingPeriods(request,env,path);
       if (path.match(/^\/api\/billing\/clients\/[^/]+\/unbilled$/)&& method==="GET") return handleBillingUnbilled(request,env,path);
       if (path.match(/^\/api\/billing\/periods\/[^/]+\/no-billing$/)&& method==="POST") return handleMarkNoBilling(request,env,path);
+      if (path==="/api/billing/rules"                            && method==="GET")  return handleListBillingRules(request,env);
+      if (path==="/api/billing/rules"                            && method==="POST") return handleCreateBillingRule(request,env);
+      if (path.match(/^\/api\/billing\/rules\/[^/]+$/)           && method==="PUT")  return handleUpdateBillingRule(request,env,path);
+      if (path==="/api/billing/generate"                         && method==="POST") return handleGenerateBilling(request,env);
+      if (path.match(/^\/api\/billing\/invoices\/[^/]+\/add-dcs$/)&& method==="POST") return handleAddDcsToTask(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/locations$/) && method==="POST") return handleAddClientLocation(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/locations\/[^/]+$/) && method==="PATCH") return handlePatchClientLocation(request,env,path);
       if (path.match(/^\/api\/clients\/[^/]+\/rename$/) && method==="POST") return handleRenameClient(request,env,path);
@@ -13418,8 +13427,24 @@ async function ensureBillingSchema(env: Env): Promise<void> {
     `CREATE TABLE IF NOT EXISTS billing_invoice_dcs ( id TEXT PRIMARY KEY, invoice_id TEXT NOT NULL, dc_id TEXT NOT NULL,
        dc_number TEXT, dc_value REAL NOT NULL DEFAULT 0, created_at TEXT DEFAULT (datetime('now')), UNIQUE (dc_id) )`,
     `CREATE INDEX IF NOT EXISTS idx_billinvdc_inv ON billing_invoice_dcs (invoice_id)`,
+    // Phase 2 — rules + cycles.
+    `CREATE TABLE IF NOT EXISTS billing_rules ( id TEXT PRIMARY KEY, client_id TEXT NOT NULL, location_id TEXT, category TEXT,
+       rule_name TEXT NOT NULL, frequency TEXT NOT NULL DEFAULT 'Monthly', closing_weekday INTEGER, cutoff_day INTEGER,
+       anchor_month INTEGER, use_working_days INTEGER NOT NULL DEFAULT 0, prep_target_days INTEGER NOT NULL DEFAULT 2,
+       submission_target_days INTEGER NOT NULL DEFAULT 5, primary_owner TEXT, backup_owner TEXT, po_default TEXT,
+       req_email INTEGER NOT NULL DEFAULT 1, req_hardcopy INTEGER NOT NULL DEFAULT 0, req_signed_dc INTEGER NOT NULL DEFAULT 0,
+       instructions TEXT, effective_start TEXT, effective_end TEXT, active INTEGER NOT NULL DEFAULT 1, created_by TEXT,
+       created_at TEXT DEFAULT (datetime('now')), updated_at TEXT )`,
+    `CREATE INDEX IF NOT EXISTS idx_billrule_client ON billing_rules (client_id, active)`,
+    `CREATE TABLE IF NOT EXISTS billing_cycles ( id TEXT PRIMARY KEY, rule_id TEXT NOT NULL, client_id TEXT NOT NULL,
+       period_key TEXT NOT NULL, label TEXT, period_start TEXT NOT NULL, period_end TEXT NOT NULL, prep_target_date TEXT,
+       submission_target_date TEXT, status TEXT NOT NULL DEFAULT 'open', created_at TEXT DEFAULT (datetime('now')),
+       UNIQUE (rule_id, period_key) )`,
+    `CREATE INDEX IF NOT EXISTS idx_billcycle_rule ON billing_cycles (rule_id, period_start)`,
   ];
   for (const s of stmts) await env.DB.prepare(s).run().catch(() => {});
+  for (const c of ["rule_id TEXT", "cycle_id TEXT", "lifecycle TEXT", "category TEXT", "po_number TEXT", "auto_generated INTEGER DEFAULT 0", "exception TEXT"])
+    await env.DB.prepare(`ALTER TABLE billing_invoices ADD COLUMN ${c}`).run().catch(() => {});
   _billingReady = true;
 }
 
@@ -13662,13 +13687,15 @@ async function handleRecordBillingInvoice(request: Request, env: Env, path: stri
   if (dup) return json({ error: `Invoice number ${invoiceNo} is already recorded for this client.` }, 409);
   const { results: dcRows } = await env.DB.prepare("SELECT dc_id FROM billing_invoice_dcs WHERE invoice_id=?").bind(id).all();
   const dcIds = (dcRows as Array<{ dc_id: string }>).map((r) => r.dc_id);
-  const sub = deriveSubmission(true, { email: !!Number(inv.req_email), portal: !!Number(inv.req_portal), hardcopy: !!Number(inv.req_hardcopy) }, {});
+  const req = { email: !!Number(inv.req_email), portal: !!Number(inv.req_portal), hardcopy: !!Number(inv.req_hardcopy) };
+  const sub = deriveSubmission(true, req, {});
+  const lifecycle = (req.email || req.portal || req.hardcopy) ? "Pending Submission" : "Invoice Generated";
   const stmts = [
     env.DB.prepare(
-      `UPDATE billing_invoices SET status='Recorded', submission_status=?, invoice_no=?, invoice_date=?,
+      `UPDATE billing_invoices SET status='Recorded', submission_status=?, lifecycle=?, invoice_no=?, invoice_date=?,
         taxable_amount=?, gst_amount=?, total_amount=?, remarks=COALESCE(?,remarks), recorded_at=datetime('now'),
         updated_by=?, updated_at=datetime('now') WHERE id=?`
-    ).bind(sub.status, invoiceNo, invoiceDate, billMoney(Number(b.taxable_amount) || 0), billMoney(Number(b.gst_amount) || 0),
+    ).bind(sub.status, lifecycle, invoiceNo, invoiceDate, billMoney(Number(b.taxable_amount) || 0), billMoney(Number(b.gst_amount) || 0),
       total, b.remarks != null ? String(b.remarks) : null, user!.sub, id),
     ...dcIds.map((dcId) => env.DB.prepare("UPDATE delivery_challans SET billed=1, billed_at=datetime('now'), invoice_no=?, invoice_date=? WHERE id=?")
       .bind(invoiceNo, invoiceDate, dcId)),
@@ -13695,10 +13722,11 @@ async function handleBillingSubmission(request: Request, env: Env, path: string)
   const sub = deriveSubmission(true,
     { email: !!Number(inv.req_email), portal: !!Number(inv.req_portal), hardcopy: !!Number(inv.req_hardcopy) },
     { email, portal, hardcopy, submitted: manual });
+  const lifecycle = sub.status === "Submitted" ? "Submitted" : sub.status === "Partially Submitted" ? "Partially Submitted" : "Pending Submission";
   await env.DB.prepare(
-    `UPDATE billing_invoices SET email_date=?, portal_date=?, hardcopy_date=?, submitted_date=?, submission_status=?,
+    `UPDATE billing_invoices SET email_date=?, portal_date=?, hardcopy_date=?, submitted_date=?, submission_status=?, lifecycle=?,
       remarks=COALESCE(?,remarks), updated_by=?, updated_at=datetime('now') WHERE id=?`
-  ).bind(email, portal, hardcopy, sub.submittedDate || manual, sub.status, b.remarks != null ? String(b.remarks) : null, user!.sub, id).run();
+  ).bind(email, portal, hardcopy, sub.submittedDate || manual, sub.status, lifecycle, b.remarks != null ? String(b.remarks) : null, user!.sub, id).run();
   await audit(env, user, "BILLING_SUBMISSION_UPDATE", "billing_invoice", id, undefined, sub.status);
   return json({ ok: true, submission_status: sub.status, submitted_date: sub.submittedDate || manual });
 }
@@ -13742,6 +13770,180 @@ async function handleBillingOverview(request: Request, env: Env): Promise<Respon
     overdue_submission: overdueSub.n,
     billed_this_month: billedMonth.n, billed_this_month_value: billedMonth.v,
   });
+}
+
+// ── Billing rules + scheduler (phase 2 backbone) ─────────────────────────────
+async function ownerNameFor(env: Env, userId: string | null | undefined): Promise<string | null> {
+  if (!userId) return null;
+  const u = await env.DB.prepare("SELECT name FROM users WHERE id=?").bind(userId).first() as { name?: string } | null;
+  return u ? String(u.name || "") : null;
+}
+// GET /api/billing/rules?client_id=
+async function handleListBillingRules(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const d = requireBilling(user); if (d) return d;
+  await ensureBillingSchema(env);
+  const cid = new URL(request.url).searchParams.get("client_id");
+  const where = cid ? "WHERE r.client_id=?" : "";
+  const { results } = await env.DB.prepare(
+    `SELECT r.*, c.name AS client_name,
+       (SELECT name FROM users u WHERE u.id=r.primary_owner) AS primary_owner_name,
+       (SELECT name FROM users u WHERE u.id=r.backup_owner) AS backup_owner_name
+     FROM billing_rules r LEFT JOIN clients c ON r.client_id=c.id ${where} ORDER BY r.active DESC, c.name, r.rule_name`
+  ).bind(...(cid ? [cid] : [])).all();
+  return json({ rules: results });
+}
+// POST /api/billing/rules
+async function handleCreateBillingRule(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const d = requireBilling(user); if (d) return d;
+  if (!["super_admin", "finance_admin"].includes(user!.role)) return json({ error: "Only an Accounts Manager can create billing rules." }, 403);
+  await ensureBillingSchema(env);
+  const b = await request.json().catch(() => ({})) as Record<string, unknown>;
+  if (!b.client_id) return json({ error: "client_id is required" }, 400);
+  if (!b.rule_name || !String(b.rule_name).trim()) return json({ error: "A rule name is required." }, 400);
+  const id = uid();
+  await env.DB.prepare(
+    `INSERT INTO billing_rules (id,client_id,location_id,category,rule_name,frequency,closing_weekday,cutoff_day,anchor_month,
+       use_working_days,prep_target_days,submission_target_days,primary_owner,backup_owner,po_default,req_email,req_hardcopy,
+       req_signed_dc,instructions,effective_start,effective_end,active,created_by)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+  ).bind(id, String(b.client_id), b.location_id ? String(b.location_id) : null, b.category ? String(b.category) : null,
+    String(b.rule_name).trim(), billFreq(b.frequency),
+    b.closing_weekday != null ? Number(b.closing_weekday) : null, b.cutoff_day != null ? Number(b.cutoff_day) : null,
+    b.anchor_month != null ? Number(b.anchor_month) : null, b.use_working_days ? 1 : 0,
+    Math.max(0, Number(b.prep_target_days) || 0), Math.max(0, Number(b.submission_target_days) || 0),
+    b.primary_owner ? String(b.primary_owner) : null, b.backup_owner ? String(b.backup_owner) : null,
+    b.po_default ? String(b.po_default) : null, b.req_email === false ? 0 : 1, b.req_hardcopy ? 1 : 0, b.req_signed_dc ? 1 : 0,
+    b.instructions ? String(b.instructions) : null, b.effective_start ? String(b.effective_start) : new Date().toISOString().slice(0, 10),
+    b.effective_end ? String(b.effective_end) : null, b.active === false ? 0 : 1, user!.sub).run();
+  await audit(env, user, "BILLING_RULE_CREATE", "billing_rule", id, undefined, `${b.rule_name} · ${billFreq(b.frequency)}`);
+  return json({ id, ok: true }, 201);
+}
+// PUT /api/billing/rules/:id
+async function handleUpdateBillingRule(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const d = requireBilling(user); if (d) return d;
+  if (!["super_admin", "finance_admin"].includes(user!.role)) return json({ error: "Only an Accounts Manager can edit billing rules." }, 403);
+  await ensureBillingSchema(env);
+  const id = path.split("/")[4];
+  const exist = await env.DB.prepare("SELECT id FROM billing_rules WHERE id=?").bind(id).first();
+  if (!exist) return json({ error: "Rule not found" }, 404);
+  const b = await request.json().catch(() => ({})) as Record<string, unknown>;
+  const cols: Record<string, unknown> = {};
+  const map: Array<[string, (v: unknown) => unknown]> = [
+    ["rule_name", v => String(v).trim()], ["frequency", v => billFreq(v)], ["category", v => v ? String(v) : null],
+    ["location_id", v => v ? String(v) : null], ["closing_weekday", v => v != null ? Number(v) : null],
+    ["cutoff_day", v => v != null ? Number(v) : null], ["anchor_month", v => v != null ? Number(v) : null],
+    ["use_working_days", v => v ? 1 : 0], ["prep_target_days", v => Math.max(0, Number(v) || 0)],
+    ["submission_target_days", v => Math.max(0, Number(v) || 0)], ["primary_owner", v => v ? String(v) : null],
+    ["backup_owner", v => v ? String(v) : null], ["po_default", v => v ? String(v) : null],
+    ["req_email", v => v ? 1 : 0], ["req_hardcopy", v => v ? 1 : 0], ["req_signed_dc", v => v ? 1 : 0],
+    ["instructions", v => v ? String(v) : null], ["effective_start", v => v ? String(v) : null],
+    ["effective_end", v => v ? String(v) : null], ["active", v => v ? 1 : 0],
+  ];
+  for (const [k, fn] of map) if (b[k] !== undefined) cols[k] = fn(b[k]);
+  const keys = Object.keys(cols);
+  if (keys.length) {
+    await env.DB.prepare(`UPDATE billing_rules SET ${keys.map(k => `${k}=?`).join(",")}, updated_at=datetime('now') WHERE id=?`)
+      .bind(...keys.map(k => cols[k]), id).run();
+    await audit(env, user, "BILLING_RULE_UPDATE", "billing_rule", id, undefined, keys.join(","));
+  }
+  return json({ ok: true });
+}
+
+// Generate cycles + one initial task per active rule, idempotently. Returns counts.
+async function generateBilling(env: Env, opts: { clientId?: string } = {}): Promise<{ cyclesCreated: number; tasksCreated: number }> {
+  await ensureBillingSchema(env);
+  const today = new Date().toISOString().slice(0, 10);
+  const nowD = new Date();
+  const from = new Date(Date.UTC(nowD.getUTCFullYear(), nowD.getUTCMonth() - 3, 1)).toISOString().slice(0, 10);
+  let q = "SELECT * FROM billing_rules WHERE active=1 AND frequency!='AdHoc'";
+  const vals: unknown[] = [];
+  if (opts.clientId) { q += " AND client_id=?"; vals.push(opts.clientId); }
+  const { results: rules } = await env.DB.prepare(q).bind(...vals).all();
+  let cyclesCreated = 0, tasksCreated = 0;
+  for (const r of rules as Array<Record<string, unknown>>) {
+    const genFrom = r.effective_start && String(r.effective_start) > from ? String(r.effective_start) : from;
+    const genTo = r.effective_end && String(r.effective_end) < today ? String(r.effective_end) : today;
+    if (genFrom > genTo) continue;
+    const cfg: CycleConfig = { closingWeekday: r.closing_weekday as number, cutoffDay: r.cutoff_day as number, anchorMonth: r.anchor_month as number };
+    const cycles = cyclesBetween(String(r.frequency) as BillingFrequency, cfg, genFrom, genTo);
+    const useWD = !!Number(r.use_working_days);
+    const cname = await clientNameFor(env, String(r.client_id));
+    const ownerName = await ownerNameFor(env, r.primary_owner as string);
+    for (const c of cycles) {
+      const prep = deadlineFrom(c.end, Number(r.prep_target_days) || 0, useWD);
+      const sub = deadlineFrom(c.end, Number(r.submission_target_days) || 0, useWD);
+      const ins = await env.DB.prepare(
+        `INSERT OR IGNORE INTO billing_cycles (id,rule_id,client_id,period_key,label,period_start,period_end,prep_target_date,submission_target_date)
+         VALUES (?,?,?,?,?,?,?,?,?)`
+      ).bind(uid(), r.id, r.client_id, c.key, c.label, c.start, c.end, prep, sub).run();
+      if (ins.meta && (ins.meta as { changes?: number }).changes) cyclesCreated++;
+      const cycle = await env.DB.prepare("SELECT id FROM billing_cycles WHERE rule_id=? AND period_key=?").bind(r.id, c.key).first() as { id: string } | null;
+      if (!cycle) continue;
+      const already = await env.DB.prepare("SELECT id FROM billing_invoices WHERE rule_id=? AND cycle_id=? AND auto_generated=1").bind(r.id, cycle.id).first();
+      if (already) continue;
+      const catFilter = r.category ? "AND dc.category=?" : "";
+      const bind = r.category ? [r.client_id, cname, r.category, c.start, c.end] : [r.client_id, cname, c.start, c.end];
+      const cnt = await env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM delivery_challans dc LEFT JOIN orders o ON dc.order_id=o.id
+         WHERE dc.status='DELIVERED' AND COALESCE(dc.billed,0)=0
+           AND (o.client_id=? OR (dc.order_id IS NULL AND dc.client_name=?)) ${catFilter}
+           AND substr(COALESCE(dc.delivered_at,dc.dispatched_at),1,10) BETWEEN ? AND ?
+           AND dc.id NOT IN (SELECT dc_id FROM billing_invoice_dcs)`
+      ).bind(...bind).first() as { n: number };
+      const has = Number(cnt.n) > 0;
+      await env.DB.prepare(
+        `INSERT INTO billing_invoices (id,client_id,rule_id,cycle_id,owner,owner_name,status,submission_status,lifecycle,category,
+           po_number,req_email,req_portal,req_hardcopy,invoice_target_date,submission_target_date,auto_generated,exception,created_by,created_by_name)
+         VALUES (?,?,?,?,?,?, 'Draft','Not Ready', ?,?,?,?,0,?,?,?,1,?,?,?)`
+      ).bind(uid(), r.client_id, r.id, cycle.id, r.primary_owner || null, ownerName,
+        has ? "To Be Billed" : "No DCs Available", r.category || null, r.po_default || null,
+        Number(r.req_email) ? 1 : 0, Number(r.req_hardcopy) ? 1 : 0, prep, sub,
+        has ? null : "No DCs Available", "scheduler", "Auto-generated").run();
+      tasksCreated++;
+      if (!has) await env.DB.prepare("UPDATE billing_cycles SET status='no_dcs' WHERE id=?").bind(cycle.id).run();
+    }
+  }
+  return { cyclesCreated, tasksCreated };
+}
+// POST /api/billing/generate { client_id? }
+async function handleGenerateBilling(request: Request, env: Env): Promise<Response> {
+  const user = await getUser(request, env); const d = requireBilling(user); if (d) return d;
+  const b = await request.json().catch(() => ({})) as { client_id?: string };
+  const r = await generateBilling(env, { clientId: b.client_id ? String(b.client_id) : undefined });
+  await audit(env, user, "BILLING_GENERATE", "billing", b.client_id || "all", undefined, `cycles ${r.cyclesCreated} · tasks ${r.tasksCreated}`);
+  return json({ ok: true, ...r });
+}
+
+// POST /api/billing/invoices/:id/add-dcs { dc_ids } — reserve more DCs onto a draft task.
+async function handleAddDcsToTask(request: Request, env: Env, path: string): Promise<Response> {
+  const user = await getUser(request, env); const d = requireBilling(user); if (d) return d;
+  await ensureBillingSchema(env);
+  const id = path.split("/")[4];
+  const inv = await env.DB.prepare("SELECT * FROM billing_invoices WHERE id=?").bind(id).first() as Record<string, unknown> | null;
+  if (!inv) return json({ error: "Invoice not found" }, 404);
+  if (String(inv.status) !== "Draft") return json({ error: "Only a draft can take more DCs." }, 400);
+  const b = await request.json().catch(() => ({})) as { dc_ids?: string[] };
+  const dcIds = Array.isArray(b.dc_ids) ? b.dc_ids.map(String).filter(Boolean) : [];
+  if (!dcIds.length) return json({ error: "Select at least one delivery challan." }, 400);
+  const cname = await clientNameFor(env, String(inv.client_id));
+  const ph = dcIds.map(() => "?").join(",");
+  const { results } = await env.DB.prepare(
+    `SELECT dc.id, dc.dc_number, COALESCE(o.grand_total,0) AS dc_value FROM delivery_challans dc
+     LEFT JOIN orders o ON dc.order_id=o.id
+     WHERE dc.id IN (${ph}) AND dc.status='DELIVERED' AND COALESCE(dc.billed,0)=0
+       AND (o.client_id=? OR (dc.order_id IS NULL AND dc.client_name=?)) AND dc.id NOT IN (SELECT dc_id FROM billing_invoice_dcs)`
+  ).bind(...dcIds, inv.client_id, cname).all();
+  const valid = results as Array<Record<string, unknown>>;
+  if (valid.length !== dcIds.length) return json({ error: "Some DCs are no longer eligible. Refresh and try again." }, 409);
+  try {
+    await env.DB.batch(valid.map((r) => env.DB.prepare("INSERT INTO billing_invoice_dcs (id,invoice_id,dc_id,dc_number,dc_value) VALUES (?,?,?,?,?)")
+      .bind(uid(), id, String(r.id), String(r.dc_number || ""), Number(r.dc_value || 0))));
+  } catch { return json({ error: "One of those DCs was just reserved elsewhere. Refresh and try again." }, 409); }
+  const tot = await env.DB.prepare("SELECT COALESCE(SUM(dc_value),0) AS v, COUNT(*) AS n FROM billing_invoice_dcs WHERE invoice_id=?").bind(id).first() as { v: number; n: number };
+  await env.DB.prepare("UPDATE billing_invoices SET allocated_value=?, lifecycle='Under Preparation', exception=NULL, updated_by=?, updated_at=datetime('now') WHERE id=?")
+    .bind(billMoney(Number(tot.v)), user!.sub, id).run();
+  await audit(env, user, "BILLING_TASK_ADD_DCS", "billing_invoice", id, undefined, `${valid.length} DCs`);
+  return json({ ok: true, dc_count: tot.n, allocated_value: billMoney(Number(tot.v)) });
 }
 
 const BUDGET_EDIT_ROLES = ["client_admin", "our_admin", "ops_admin", "super_admin"]; // our_admin acts "on behalf"

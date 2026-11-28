@@ -148,3 +148,66 @@ describe("overview", () => {
     expect((await get("/api/billing/overview", cuTok)).status).toBe(403);
   });
 });
+
+describe("rules + scheduler (phase 2)", () => {
+  const EFF = new Date(Date.now() - 75 * 86400000).toISOString().slice(0, 10); // ~75 days ago → backfills a few cycles
+  async function seedRuleAndGenerate(extra = {}) {
+    await post("/api/billing/rules", { client_id: "cCh", rule_name: "Chaayos monthly", frequency: "Monthly", primary_owner: "u-fin", effective_start: EFF, ...extra }, finTok);
+    await post("/api/billing/generate", { client_id: "cCh" }, finTok);
+    // the current-month auto task has eligible DCs (dc1/dc2 delivered today)
+    return await db().prepare("SELECT * FROM billing_invoices WHERE client_id='cCh' AND auto_generated=1 AND lifecycle='To Be Billed' ORDER BY created_at DESC LIMIT 1").first() as any;
+  }
+
+  it("creates a rule, lists it, and a client user is blocked", async () => {
+    const c = await post("/api/billing/rules", { client_id: "cCh", rule_name: "Monthly bill", frequency: "Monthly", primary_owner: "u-fin" }, finTok);
+    expect(c.status).toBe(201);
+    const list = await (await get("/api/billing/rules?client_id=cCh", finTok)).json() as any;
+    expect(list.rules.some((r: any) => r.rule_name === "Monthly bill" && r.primary_owner_name === "Meera")).toBe(true);
+    expect((await get("/api/billing/rules", cuTok)).status).toBe(403);
+    expect((await post("/api/billing/rules", { client_id: "cCh", rule_name: "x" }, cuTok)).status).toBe(403);
+  });
+
+  it("generation creates cycles + one initial task per cycle, idempotently", async () => {
+    const g1 = await (await post("/api/billing/generate", { client_id: "cCh" }, finTok)).json() as any;
+    // no rules yet → nothing
+    expect(g1.tasksCreated).toBe(0);
+    await post("/api/billing/rules", { client_id: "cCh", rule_name: "Monthly", frequency: "Monthly", primary_owner: "u-fin" }, finTok);
+    const g2 = await (await post("/api/billing/generate", { client_id: "cCh" }, finTok)).json() as any;
+    expect(g2.cyclesCreated).toBeGreaterThan(0);
+    expect(g2.tasksCreated).toBe(g2.cyclesCreated); // one task per cycle
+    const g3 = await (await post("/api/billing/generate", { client_id: "cCh" }, finTok)).json() as any;
+    expect(g3.cyclesCreated).toBe(0); // idempotent
+    expect(g3.tasksCreated).toBe(0);
+  });
+
+  it("the current-period task inherits owner + targets and shows 'To Be Billed' when DCs exist", async () => {
+    const t = await seedRuleAndGenerate();
+    expect(t).toBeTruthy();
+    expect(t.owner).toBe("u-fin");
+    expect(t.lifecycle).toBe("To Be Billed");
+    expect(t.submission_target_date).toBeTruthy();
+    // an older cycle with no DCs is flagged No DCs Available
+    const noDc = await db().prepare("SELECT COUNT(*) AS n FROM billing_invoices WHERE client_id='cCh' AND exception='No DCs Available'").first() as any;
+    expect(Number(noDc.n)).toBeGreaterThan(0);
+  });
+
+  it("DCs can be added to an auto task and then recorded", async () => {
+    const t = await seedRuleAndGenerate();
+    const add = await post(`/api/billing/invoices/${t.id}/add-dcs`, { dc_ids: ["dc1", "dc2"] }, finTok);
+    expect(add.status).toBe(200);
+    const j = await add.json() as any;
+    expect(j.dc_count).toBe(2);
+    expect(j.allocated_value).toBe(15000);
+    expect((await db().prepare("SELECT lifecycle FROM billing_invoices WHERE id=?").bind(t.id).first() as any).lifecycle).toBe("Under Preparation");
+    const rec = await post(`/api/billing/invoices/${t.id}/record`, { invoice_no: "INV-A1", invoice_date: TODAY, total_amount: 15000 }, finTok);
+    expect(rec.status).toBe(200);
+    expect((await db().prepare("SELECT billed FROM delivery_challans WHERE id='dc1'").first() as any).billed).toBe(1);
+  });
+
+  it("Weekly and Quarterly rules generate cycles", async () => {
+    await post("/api/billing/rules", { client_id: "cCh", rule_name: "Weekly", frequency: "Weekly", closing_weekday: 0, primary_owner: "u-fin", effective_start: EFF }, finTok);
+    await post("/api/billing/rules", { client_id: "cCh", rule_name: "Qtr", frequency: "Quarterly", anchor_month: 1, primary_owner: "u-fin", effective_start: EFF }, finTok);
+    const g = await (await post("/api/billing/generate", { client_id: "cCh" }, finTok)).json() as any;
+    expect(g.cyclesCreated).toBeGreaterThan(3); // several weeks + a quarter
+  });
+});
